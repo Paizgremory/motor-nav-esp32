@@ -1,4 +1,11 @@
 /*
+  v22.37: MENU LCD -> MODE UPLOAD WIFI LANGSUNG (juga di ESP32-C3). Di Pengaturan, item WALLPAPER dan ANIMASI BOOT: pada board tanpa microSD (C3)
+  TAHAN sensor = langsung masuk mode WiFi (BLE dimatikan, ESP32 membuat WiFi "MotorNav", sandi motornav1234, alamat 192.168.4.1; layar menampilkan
+  judul UPLOAD WALLPAPER / UPLOAD ANIM BOOT). Item UPLOAD WIFI kini tampil di semua board. Berkas ditulis ke partisi flash (foto 115 KB -> spiffs,
+  animasi boot -> bootanim); yang tidak muat ditolak "TIDAK MUAT". Tahan sensor 1,2 dtk = batal; selesai/batal = restart otomatis.
+  Board dengan microSD: perilaku lama tetap (TAHAN = ganti slot; upload lewat item UPLOAD WIFI). Aplikasi: opsi "Kirim lewat WiFi" (Nav160/MotorNav v3.21).
+
+/*
   v22.36: EFEK GETAR JALAN (GIMMICK, TANPA SENSOR FISIK). Pengaturan ke-13 (cfg[12], 0/1, default 0/mati) dari aplikasi:
   bila nyala, wajah standby (mode 0 saja, bukan foto/video) ikut bergoyang kecil mengikuti guncangan jalan, dibaca dari
   akselerometer HP (bukan MPU6050 -- sudah dicabut di v22.35) lewat paket BLE baru [0xFF][0x34][intensitas u8 0..255],
@@ -338,17 +345,16 @@
 #include "standby_photo.h"
 #include <esp_partition.h>
 #include <esp_ota_ops.h>                                      // v22.31: update firmware lewat BLE
+#include <WiFi.h>                                           // v22.37: mode UPLOAD WIFI juga untuk C3 (tanpa SD: berkas ditulis ke partisi flash)
+#include <esp_http_server.h>
 #if !CONFIG_IDF_TARGET_ESP32C3
   #define HAVE_SD 1
   #include <SPI.h>
   #include <SD.h>
-  #include <WiFi.h>
-  #include <esp_http_server.h>
 #else
   #define HAVE_SD 0
 #endif
 #include <esp_idf_version.h>
-struct Navigation; // forward declaration fix: error Navigation does not name a type
 #if __has_include(<rom/tjpgd.h>)
   #include <rom/tjpgd.h>            // dekoder JPEG di ROM ESP32-C3/S3: tidak makan flash program, RAM kerja cuma ~5 KB
   #define HAVE_ROM_JPEG 1
@@ -4375,14 +4381,9 @@ bool bootPressed() {                                               // tombol BOO
 }
 
 // ---------- Menu pengaturan (tahan sensor 4 dtk di standby) ----------
-void wifiUploadMode();                                             // v22.28: mode upload WiFi (tidak kembali; ESP32 restart)
-#if HAVE_SD
-  #define SET_N 7
-  const char *SET_NAME[SET_N] = {"WALLPAPER", "ANIMASI BOOT", "TAMPILAN NAV", "TEMA", "STANDBY", "UPLOAD WIFI", "KELUAR"};
-#else                                                              // v22.32: C3 tanpa SD/WiFi upload -> item UPLOAD WIFI tidak ada
-  #define SET_N 6
-  const char *SET_NAME[SET_N] = {"WALLPAPER", "ANIMASI BOOT", "TAMPILAN NAV", "TEMA", "STANDBY", "KELUAR"};
-#endif
+void wifiUploadMode(uint8_t hint = 0);                             // v22.37: hint 0 umum, 1 wallpaper, 2 animasi boot. v22.28: mode upload WiFi (tidak kembali; ESP32 restart)
+#define SET_N 7                                                    // v22.37: UPLOAD WIFI ada di semua board (C3 juga)
+const char *SET_NAME[SET_N] = {"WALLPAPER", "ANIMASI BOOT", "TAMPILAN NAV", "TEMA", "STANDBY", "UPLOAD WIFI", "KELUAR"};
 
 void saveU8(const char *k, uint8_t v) {
   prefs.begin("nav", false);
@@ -4401,14 +4402,14 @@ void drawSettings() {
 #if HAVE_SD
       wpMenuText(v, sizeof(v), info, sizeof(info));
 #else
-      strlcpy(v, "TANPA SD", sizeof(v)); wpInfo(info, sizeof(info));
+      strlcpy(v, "TAHAN", sizeof(v)); strlcpy(info, "UPLOAD FOTO/VIDEO LEWAT WIFI", sizeof(info));   // v22.37: tanpa SD -> langsung mode WiFi
 #endif
       break;
     case 1:                                                        // v22.30: animasi boot (slot di SD)
 #if HAVE_SD
       btMenuText(v, sizeof(v), info, sizeof(info));
 #else
-      strlcpy(v, "TANPA SD", sizeof(v)); strlcpy(info, "BUTUH MICROSD", sizeof(info));
+      strlcpy(v, "TAHAN", sizeof(v)); strlcpy(info, "UPLOAD ANIMASI LEWAT WIFI", sizeof(info));      // v22.37
 #endif
       break;
     case 2:
@@ -4417,9 +4418,7 @@ void drawSettings() {
       break;
     case 3: strlcpy(v, lightTheme ? "TERANG" : "GELAP", sizeof(v)); strlcpy(info, "TAHAN: UBAH TEMA", sizeof(info)); break;
     case 4: strlcpy(v, standbyMode ? "FOTO/VIDEO" : "WAJAH", sizeof(v)); strlcpy(info, "TAHAN: UBAH MODE", sizeof(info)); break;
-#if HAVE_SD
     case 5: strlcpy(v, "TAHAN", sizeof(v)); strlcpy(info, "MULAI UPLOAD LEWAT WIFI", sizeof(info)); break;
-#endif
     default: strlcpy(v, "TAHAN", sizeof(v)); strlcpy(info, "KEMBALI KE STANDBY", sizeof(info)); break;
   }
   drawCentered(v, 106, 3, COL_TEXT);
@@ -4455,14 +4454,16 @@ void settingsAction() {                                            // dipanggil 
   switch (setIdx) {
     case 0:                                                        // v22.29: TAHAN = wallpaper berikutnya (BAWAAN, lalu semua berkas di SD)
 #if HAVE_SD
-      if (sdOK && !bleWpBusy()) wpCycle();
+      if (sdOK) { if (!bleWpBusy()) wpCycle(); break; }
 #endif
-      break;
+      wifiUploadMode(1);                                           // v22.37: tanpa SD (C3) = TAHAN langsung masuk mode WiFi
+      return;
     case 1:                                                        // v22.30: TAHAN = animasi boot berikutnya (TANPA ANIMASI, lalu semua berkas di SD)
 #if HAVE_SD
-      if (sdOK && !bleWpBusy()) btCycle();
+      if (sdOK) { if (!bleWpBusy()) btCycle(); break; }
 #endif
-      break;
+      wifiUploadMode(2);                                           // v22.37
+      return;
     case 2:
       navStyle = (navStyle + 1) % (MAP_BLE ? 3 : 2);
       saveU8("navst", navStyle);
@@ -4476,11 +4477,9 @@ void settingsAction() {                                            // dipanggil 
       standbyMode = standbyMode ? 0 : 1;
       saveU8("sbmode", standbyMode);
       break;
-#if HAVE_SD
     case 5:
       wifiUploadMode();                                            // blokir sampai selesai/batal, lalu restart
       return;
-#endif
     default:
       settingsLeave();
       return;
@@ -4649,7 +4648,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.34"
+#define FW_VER "v22.37"
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -4883,7 +4882,7 @@ void bleWpTick() {                                                 // dipanggil 
 // BLE dimatikan, ESP32 membuka WiFi sendiri (SSID/sandi di bawah), aplikasi MotorNav mengirim berkas lewat HTTP: POST /up?tgt=0|1&crc=<hex>
 // dengan badan = citra lengkap (sama dengan isi upload BLE). Video & animasi boot -> SD (file sementara, diganti bila CRC cocok);
 // foto 115216 B -> partisi flash. Tanpa SD, video ditulis ke partisi flash bila muat. Selesai atau batal = restart.
-#if HAVE_SD && MAP_BLE && TILT_UI
+#if MAP_BLE && TILT_UI
 #define WU_SSID "MotorNav"
 #define WU_PASS "motornav1234"
 static volatile uint32_t wuGot = 0, wuTotal = 0;
@@ -4901,6 +4900,12 @@ static esp_err_t wuFail(httpd_req_t *req, const char *msg) {
 
 static esp_err_t wuPing(httpd_req_t *req) { httpd_resp_sendstr(req, "MotorNav v22.30"); return ESP_OK; }
 
+#if HAVE_SD
+  #define WU_MAX SD_MAX_UP
+#else
+  #define WU_MAX (1024UL * 1024UL)                                 // tanpa SD: batas = ukuran partisi (dicek lagi di bawah)
+#endif
+
 static esp_err_t wuUp(httpd_req_t *req) {
   char q[64], v[16];
   uint8_t tgt = 0; uint32_t crc = 0; bool haveCrc = false; uint16_t slot = 0;
@@ -4911,10 +4916,10 @@ static esp_err_t wuUp(httpd_req_t *req) {
   }
   uint32_t size = req->content_len;
   wuTotal = size; wuGot = 0;
-  if (!haveCrc || size < 64 || (size & 3) || size > SD_MAX_UP || !wuBuf) return wuFail(req, "PARAMETER SALAH");
+  if (!haveCrc || size < 64 || (size & 3) || size > WU_MAX || !wuBuf) return wuFail(req, "PARAMETER SALAH");
+#if HAVE_SD
   if (!sdOK) slot = 0;                                             // v22.30: animasi boot (tgt=1) juga boleh memakai slot
   bool toSd = sdOK && (tgt || slot || size != PHOTO_BYTES);
-  const esp_partition_t *part = nullptr;
   File f;
   char tmpB[28], dstB[28];
   if (slot) {
@@ -4922,13 +4927,20 @@ static esp_err_t wuUp(httpd_req_t *req) {
     else     { wpPath(slot, dstB, sizeof(dstB)); wpPath(slot, tmpB, sizeof(tmpB), true); }
   }
   const char *tmp = slot ? tmpB : (tgt ? SD_BOOT_TMP : SD_WALL_TMP), *dst = slot ? dstB : (tgt ? SD_BOOT : SD_WALL);
+#else
+  const bool toSd = false;                                         // v22.37: C3 tanpa SD -> selalu ke partisi flash
+#endif
+  const esp_partition_t *part = nullptr;
+#if HAVE_SD
   if (toSd) {
     SD.remove(tmp);
     f = SD.open(tmp, FILE_WRITE);
     if (!f) return wuFail(req, "SD GAGAL DIBUKA");
-  } else {
+  } else
+#endif
+  {
     part = tgt ? bootPart() : photoPart();
-    if (!part || size > part->size) return wuFail(req, "TIDAK MUAT: PASANG SD");
+    if (!part || size > part->size) return wuFail(req, sdOK ? "TIDAK MUAT" : "TIDAK MUAT (FOTO/VIDEO KECIL)");
     if (esp_partition_erase_range(part, 0, 4096) != ESP_OK) return wuFail(req, "FLASH GAGAL");
   }
   wuState = 1;
@@ -4947,20 +4959,28 @@ static esp_err_t wuUp(httpd_req_t *req) {
     }
     if (!ok) break;
     c = wpCrc(c, wuBuf, got);
+#if HAVE_SD
     if (toSd) {
       if (f.write(wuBuf, got) != got) ok = false;
-    } else {
+    } else
+#endif
+    {
       if (off == 0) { memcpy(magic, wuBuf, 8); memset(wuBuf, 0xFF, 8); }
       else if (esp_partition_erase_range(part, off, 4096) != ESP_OK) ok = false;
       if (ok && esp_partition_write(part, off, wuBuf, got) != ESP_OK) ok = false;
     }
     off += got; wuGot = off;
   }
+#if HAVE_SD
   if (toSd) f.close();
+#endif
   if (!ok || (~c) != crc) {
+#if HAVE_SD
     if (toSd) SD.remove(tmp);
+#endif
     return wuFail(req, ok ? "CRC TIDAK COCOK" : "KONEKSI PUTUS");
   }
+#if HAVE_SD
   if (toSd) {
     File chk = SD.open(tmp, FILE_READ);
     bool szOk = chk && chk.size() == size;
@@ -4973,19 +4993,24 @@ static esp_err_t wuUp(httpd_req_t *req) {
       const esp_partition_t *k = tgt ? bootPart() : photoPart();   // kosongkan slot flash yang sama agar tidak muncul lagi nanti
       if (k) esp_partition_erase_range(k, 0, 4096);
     }
-  } else {
-    if (esp_partition_write(part, 0, magic, 8) != ESP_OK) return wuFail(req, "FLASH GAGAL");
+  } else
+#endif
+  {
+    if (esp_partition_write(part, 0, magic, 8) != ESP_OK) return wuFail(req, "FLASH GAGAL");   // tanda sah paling akhir
+#if HAVE_SD
     if (sdOK && tgt == 0) SD.remove(SD_WALL);                      // foto baru menggantikan video SD lama
+#endif
   }
   wuState = 2;
   httpd_resp_sendstr(req, "OK");
   return ESP_OK;
 }
 
+static uint8_t wuHint = 0;                                         // v22.37: 1 = dari menu WALLPAPER, 2 = dari menu ANIMASI BOOT
 static void wuDraw(const char *l1, const char *l2, uint16_t col) {
   gfx->fillScreen(COL_BG);
   drawRing(1.0f, COL_ORANGE);
-  drawCentered("UPLOAD WIFI", 34, 2, COL_ORANGE);
+  drawCentered(wuHint == 1 ? "UPLOAD WALLPAPER" : (wuHint == 2 ? "UPLOAD ANIM BOOT" : "UPLOAD WIFI"), 34, 2, COL_ORANGE);
   drawCentered(String("WIFI: ") + WU_SSID, 68, 1, COL_TEXT);
   drawCentered(String("SANDI: ") + WU_PASS, 82, 1, COL_TEXT);
   drawCentered("ALAMAT: 192.168.4.1", 96, 1, COL_DIM);
@@ -4995,7 +5020,8 @@ static void wuDraw(const char *l1, const char *l2, uint16_t col) {
   syncFB();
 }
 
-void wifiUploadMode() {
+void wifiUploadMode(uint8_t hint) {
+  wuHint = hint;
   uiAngle = 0;
   wuDraw("MEMULAI", "MATIKAN BLE, NYALAKAN WIFI", COL_TEXT);
   if (wpMapped) { WP_UNMAP(wpH); wpMapped = false; }
@@ -5054,7 +5080,7 @@ void wifiUploadMode() {
   }
 }
 #else
-void wifiUploadMode() {}
+void wifiUploadMode(uint8_t) {}
 #endif
 
 void setup() {
