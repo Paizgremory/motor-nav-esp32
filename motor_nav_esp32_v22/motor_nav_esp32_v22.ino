@@ -516,6 +516,7 @@ void asciiClean(const String &in, char *out, size_t cap);   // didefinisikan di 
 
 // v22.22: pengganti tipe Navigation milik library Chronos. active diisi dari aplikasi MotorNav (appNavOn); sisanya selalu kosong
 // karena banner/peta digambar HP.
+struct Navigation; // forward declaration fix: error Navigation does not name a type
 struct Navigation {
   bool active = false, hasIcon = false;
   String title, directions, distance, speed, eta, duration;
