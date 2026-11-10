@@ -348,6 +348,7 @@
 #include <esp_ota_ops.h>                                      // v22.31: update firmware lewat BLE
 #include <WiFi.h>                                           // v22.37: mode UPLOAD WIFI juga untuk C3 (tanpa SD: berkas ditulis ke partisi flash)
 #include <esp_http_server.h>
+struct Navigation;                                          // v22.37: deklarasi awal agar prototipe otomatis Arduino (const Navigation &) tidak error
 #if !CONFIG_IDF_TARGET_ESP32C3
   #define HAVE_SD 1
   #include <SPI.h>
