@@ -348,6 +348,7 @@
   #define HAVE_SD 0
 #endif
 #include <esp_idf_version.h>
+struct Navigation; // forward declaration fix: error Navigation does not name a type
 #if __has_include(<rom/tjpgd.h>)
   #include <rom/tjpgd.h>            // dekoder JPEG di ROM ESP32-C3/S3: tidak makan flash program, RAM kerja cuma ~5 KB
   #define HAVE_ROM_JPEG 1
@@ -516,7 +517,6 @@ void asciiClean(const String &in, char *out, size_t cap);   // didefinisikan di 
 
 // v22.22: pengganti tipe Navigation milik library Chronos. active diisi dari aplikasi MotorNav (appNavOn); sisanya selalu kosong
 // karena banner/peta digambar HP.
-struct Navigation; // forward declaration fix: error Navigation does not name a type
 struct Navigation {
   bool active = false, hasIcon = false;
   String title, directions, distance, speed, eta, duration;
