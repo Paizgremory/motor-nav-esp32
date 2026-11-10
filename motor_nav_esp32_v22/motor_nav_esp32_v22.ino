@@ -4,6 +4,7 @@
   judul UPLOAD WALLPAPER / UPLOAD ANIM BOOT). Item UPLOAD WIFI kini tampil di semua board. Berkas ditulis ke partisi flash (foto 115 KB -> spiffs,
   animasi boot -> bootanim); yang tidak muat ditolak "TIDAK MUAT". Tahan sensor 1,2 dtk = batal; selesai/batal = restart otomatis.
   Board dengan microSD: perilaku lama tetap (TAHAN = ganti slot; upload lewat item UPLOAD WIFI). Aplikasi: opsi "Kirim lewat WiFi" (Nav160/MotorNav v3.21).
+*/
 
 /*
   v22.36: EFEK GETAR JALAN (GIMMICK, TANPA SENSOR FISIK). Pengaturan ke-13 (cfg[12], 0/1, default 0/mati) dari aplikasi:
