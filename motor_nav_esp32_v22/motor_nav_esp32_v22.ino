@@ -5136,14 +5136,18 @@ void setup() {
   standbyMode = prefs.getUChar("sbmode", 0) ? 1 : 0;               // mode standby terakhir
   { uint8_t t[CFG_N]; size_t n = prefs.getBytesLength("cfg"); if (n == CFG_N && prefs.getBytes("cfg", t, CFG_N) == CFG_N) { memcpy(cfg, t, CFG_N); cfgClamp(); } }
   prefs.end();
+  Serial.printf("[boot] sebelum animasi boot | heap %u\n", (unsigned)ESP.getFreeHeap());   // v22.37: jejak diagnostik
   bootAnimPlay();                                                  // v22.25: animasi boot dari aplikasi (kecerahan sudah terbaca dari cfg)
+  Serial.println("[boot] animasi boot selesai");
   gfx->fillScreen(COL_BG);
   syncFB();
 #if MAP_BLE
   mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
   mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
   if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
+  Serial.printf("[boot] buffer peta: %p %p %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, (unsigned)ESP.getFreeHeap());
   NimBLEDevice::init("Motor Nav");
+  Serial.printf("[boot] BLE init OK | heap %u\n", (unsigned)ESP.getFreeHeap());
   artBuf = (uint16_t *)malloc(ART_BYTES);
   NimBLEServer *msrv = NimBLEDevice::createServer();
   msrv->setCallbacks(&mapSrvCb, false);
@@ -5164,6 +5168,7 @@ void setup() {
     adv->enableScanResponse(true);
     adv->start();
   }
+  Serial.printf("[boot] BLE iklan jalan, setup selesai | heap %u\n", (unsigned)ESP.getFreeHeap());
 #endif
 }
 
