@@ -1,0 +1,52 @@
+name: Compile motor_nav ESP32 firmware
+
+on:
+  push:
+    paths:
+      - "motor_nav_esp32_v22/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: esp32-devkit
+            fqbn: "esp32:esp32:esp32:PartitionScheme=default"
+          - name: esp32c3-super-mini
+            fqbn: "esp32:esp32:esp32c3:PartitionScheme=default,CDCOnBoot=cdc"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Compile sketch (${{ matrix.name }})
+        uses: arduino/compile-sketches@v1
+        with:
+          fqbn: ${{ matrix.fqbn }}
+          platforms: |
+            - name: esp32:esp32
+              source-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          libraries: |
+            - name: GFX Library for Arduino
+            - name: NimBLE-Arduino
+          sketch-paths: |
+            - motor_nav_esp32_v22
+          cli-compile-flags: |
+            - --export-binaries
+          enable-deltas-report: false
+          verbose: true
+
+      - name: Upload compiled binaries (termasuk merged.bin)
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.name }}
+          path: |
+            motor_nav_esp32_v22/build/**/*.merged.bin
+            motor_nav_esp32_v22/build/**/*.bin
+            motor_nav_esp32_v22/build/**/*.elf
+          if-no-files-found: error
