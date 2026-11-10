@@ -348,6 +348,9 @@
 #include <esp_ota_ops.h>                                      // v22.31: update firmware lewat BLE
 #include <WiFi.h>                                           // v22.37: mode UPLOAD WIFI juga untuk C3 (tanpa SD: berkas ditulis ke partisi flash)
 #include <esp_http_server.h>
+#if !CONFIG_IDF_TARGET_ESP32C3
+  #include <esp_bt.h>                                       // v22.38: lepas memori Bluetooth Classic (ESP32 biasa) agar BLE muat di RAM
+#endif
 struct Navigation;                                          // v22.37: deklarasi awal agar prototipe otomatis Arduino (const Navigation &) tidak error
 #if !CONFIG_IDF_TARGET_ESP32C3
   #define HAVE_SD 1
@@ -4650,7 +4653,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.37"
+#define FW_VER "v22.38"
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -5086,6 +5089,9 @@ void wifiUploadMode(uint8_t) {}
 #endif
 
 void setup() {
+#if !CONFIG_IDF_TARGET_ESP32C3
+  esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);          // v22.38: ESP32 biasa hanya pakai BLE; membebaskan puluhan KB heap (sebelumnya BLE gagal menyala: RAM habis)
+#endif
   rlyInit();                                                       // v22.33: relay motor paling awal (default OFF)
   Serial.begin(115200);
   pinMode(PIN_TOUCH, INPUT);
@@ -5142,13 +5148,8 @@ void setup() {
   gfx->fillScreen(COL_BG);
   syncFB();
 #if MAP_BLE
-  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
-  mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
-  if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
-  Serial.printf("[boot] buffer peta: %p %p %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, (unsigned)ESP.getFreeHeap());
-  NimBLEDevice::init("Motor Nav");
-  Serial.printf("[boot] BLE init OK | heap %u\n", (unsigned)ESP.getFreeHeap());
-  artBuf = (uint16_t *)malloc(ART_BYTES);
+  NimBLEDevice::init("Motor Nav");                                 // v22.38: BLE dulu, sebelum buffer peta (BLE butuh blok RAM besar)
+  Serial.printf("[boot] BLE init OK | heap %u | blok terbesar %u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
   NimBLEServer *msrv = NimBLEDevice::createServer();
   msrv->setCallbacks(&mapSrvCb, false);
   NimBLEService *msvc = msrv->createService(MAP_SVC_UUID);
@@ -5168,7 +5169,11 @@ void setup() {
     adv->enableScanResponse(true);
     adv->start();
   }
-  Serial.printf("[boot] BLE iklan jalan, setup selesai | heap %u\n", (unsigned)ESP.getFreeHeap());
+  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);                       // v22.38: buffer peta/sampul dialokasi setelah BLE menyala
+  mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
+  if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
+  artBuf = (uint16_t *)malloc(ART_BYTES);
+  Serial.printf("[boot] setup selesai | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
 #endif
 }
 
