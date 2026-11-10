@@ -38,8 +38,6 @@ jobs:
             - motor_nav_esp32_v22
           cli-compile-flags: |
             - --export-binaries
-          - --build-property
-          - upload.maximum_size=1703936
             - --build-property
             - upload.maximum_size=1703936
           enable-deltas-report: false
