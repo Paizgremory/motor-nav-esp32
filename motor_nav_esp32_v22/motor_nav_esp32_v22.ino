@@ -540,6 +540,7 @@ struct Navigation {
 #define ART_W      64
 #define ART_BYTES  (ART_W * ART_W * 2)
 static uint16_t *artBuf = nullptr;
+static float artAmpG = 0;                                          // v22.41: 0..1, seberapa tampil sampul (dipakai menggeser progress bar)
 static volatile uint16_t artGot = 0;
 static volatile bool artOn = false;
 #define CFG_N 13
@@ -2558,8 +2559,14 @@ bool sdOK = false;                         // kartu terpasang & terbaca
 
 void sdBegin() {
   sdSpi.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  sdOK = SD.begin(SD_CS, sdSpi, SD_HZ);
-  Serial.println(sdOK ? "SD: terbaca" : "SD: tidak ada / gagal dibaca (pakai partisi flash)");
+  static const uint32_t hzTry[] = {SD_HZ, 10000000, 4000000, 1000000};   // v22.40: kabel jumper sering gagal di 20 MHz -> coba makin pelan
+  sdOK = false;
+  for (uint8_t i = 0; i < 4 && !sdOK; i++) {
+    if (i) SD.end();
+    sdOK = SD.begin(SD_CS, sdSpi, hzTry[i]);
+    if (sdOK) Serial.printf("SD: terbaca @ %u Hz | tipe %u | %u MB\n", (unsigned)hzTry[i], (unsigned)SD.cardType(), (unsigned)(SD.cardSize() / (1024ULL * 1024ULL)));
+  }
+  if (!sdOK) Serial.println("SD: tidak ada / gagal dibaca (pakai partisi flash) -- cek kabel, VCC 5V, format FAT32");
 }
 
 // Video di SD: "MNVIDEO2" (header 8 KB, maks 900 frame) atau "MNVIDEO3" (header = 16 + n*8 dibulatkan 4 KB, sampai 65535 frame).
@@ -2802,7 +2809,7 @@ void drawPhotoPlayer(uint32_t now) {
   uint32_t posS = musPosAt ? (uint32_t)musPosS + (now - musPosAt) / 1000UL : musicElapsed / 1000UL;
   uint32_t durS = musDurS;
   if (durS && posS > durS) posS = durS;
-  const int X0 = 50, X1 = 190, Y = 178;
+  const int X0 = 50 + (int)(44 * artAmpG), X1 = 190 + (int)(6 * artAmpG), Y = 178 + (int)(4 * artAmpG);   // v22.41: sampul di kiri bar -> bar bergeser kanan
   float frac = durS ? (float)posS / (float)durS : 1.0f;
   int xe = X0 + (int)((X1 - X0) * frac);
   const uint16_t GREY = 0x8410;
@@ -2825,13 +2832,13 @@ void drawPhotoPlayer(uint32_t now) {
   }
   char tb[8];
   snprintf(tb, sizeof(tb), "%u:%02u", (unsigned)(posS / 60), (unsigned)(posS % 60));
-  fb->setTextColor(0x0000); fb->setCursor(X0 + 1, 187); fb->print(tb);
-  fb->setTextColor(0xFFFF); fb->setCursor(X0, 186); fb->print(tb);
+  fb->setTextColor(0x0000); fb->setCursor(X0 + 1, Y + 9); fb->print(tb);
+  fb->setTextColor(0xFFFF); fb->setCursor(X0, Y + 8); fb->print(tb);
   if (durS) {
     snprintf(tb, sizeof(tb), "%u:%02u", (unsigned)(durS / 60), (unsigned)(durS % 60));
     int tx = X1 - (int)strlen(tb) * 6;
-    fb->setTextColor(0x0000); fb->setCursor(tx + 1, 187); fb->print(tb);
-    fb->setTextColor(0xCE79); fb->setCursor(tx, 186); fb->print(tb);
+    fb->setTextColor(0x0000); fb->setCursor(tx + 1, Y + 9); fb->print(tb);
+    fb->setTextColor(0xCE79); fb->setCursor(tx, Y + 8); fb->print(tb);
   }
 }
 
@@ -2839,16 +2846,19 @@ void drawPhotoPlayer(uint32_t now) {
 void drawArt(float dt) {
   static float amp = 0;
   amp = ap(amp, (musicOn && artOn && artBuf && cfg[1]) ? 1.0f : 0.0f, 300.0f, dt);
+  artAmpG = amp;
   if (amp < 0.03f) return;
-  const int X0 = 88, Y0 = 30, R = 10;
+  // v22.41: sampul diperkecil jadi 36x36 dan ditaruh di KIRI progress bar / detik lagu (sebelumnya 64x64 di atas jam)
+  const int S = 36, X0 = 54, Y0 = 170, R = 8;
   int a = (int)(cfg[0] * amp);
-  for (int y = 0; y < ART_W; y++) {
-    int cy = (y < R) ? R - y : (y >= ART_W - R ? y - (ART_W - 1 - R) : 0);
+  for (int y = 0; y < S; y++) {
+    int cy = (y < R) ? R - y : (y >= S - R ? y - (S - 1 - R) : 0);
     uint16_t *row = fb->row(Y0 + y) + X0;
-    for (int x = 0; x < ART_W; x++) {
-      int cx = (x < R) ? R - x : (x >= ART_W - R ? x - (ART_W - 1 - R) : 0);
+    const uint16_t *src = artBuf + (y * ART_W / S) * ART_W;
+    for (int x = 0; x < S; x++) {
+      int cx = (x < R) ? R - x : (x >= S - R ? x - (S - 1 - R) : 0);
       if (cx * cx + cy * cy > R * R) continue;
-      row[x] = blend565(row[x], artBuf[y * ART_W + x], a);
+      row[x] = blend565(row[x], src[x * ART_W / S], a);
     }
   }
 }
@@ -4653,7 +4663,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.39"
+#define FW_VER "v22.41"
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -4945,7 +4955,7 @@ static esp_err_t wuUp(httpd_req_t *req) {
 #endif
   {
     part = tgt ? bootPart() : photoPart();
-    if (!part || size > part->size) return wuFail(req, sdOK ? "TIDAK MUAT" : "TIDAK MUAT (FOTO/VIDEO KECIL)");
+    if (!part || size > part->size) return wuFail(req, sdOK ? "TIDAK MUAT" : "SD TIDAK TERBACA");
     if (esp_partition_erase_range(part, 0, 4096) != ESP_OK) return wuFail(req, "FLASH GAGAL");
   }
   wuState = 1;
