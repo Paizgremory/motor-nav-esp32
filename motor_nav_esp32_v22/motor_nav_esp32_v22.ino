@@ -4653,7 +4653,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.38"
+#define FW_VER "v22.39"
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -5036,6 +5036,13 @@ void wifiUploadMode(uint8_t hint) {
   if (artBuf) { free(artBuf); artBuf = nullptr; }
   if (mapBuf[0]) { free(mapBuf[0]); mapBuf[0] = nullptr; }
   if (mapBuf[1]) { free(mapBuf[1]); mapBuf[1] = nullptr; }
+  if (canvasOK && fb) {                                            // v22.39: WiFi butuh ~70 KB RAM; lepas kanvas 115 KB, gambar langsung ke layar (restart sesudah selesai)
+    for (int i = 0; i < SplitCanvas::SN; i++) { free(fb->s[i]); fb->s[i] = nullptr; }
+    canvasOK = false;
+  }
+  gfx = panel;
+  Serial.printf("WiFi upload: heap sebelum WiFi %u | blok terbesar %u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  wuDraw("MEMULAI", "MENYALAKAN WIFI", COL_TEXT);
   wuBuf = (uint8_t *)malloc(4096);
   WiFi.mode(WIFI_AP);
   bool ap = WiFi.softAP(WU_SSID, WU_PASS, 1, 0, 1);
