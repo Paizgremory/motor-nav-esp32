@@ -1144,17 +1144,15 @@ static void drawNavMap(const Navigation &nav, int dir, bool noDist, float meters
 }
 
 void drawNavPage(const Navigation &nav, bool connected) {
-  gfx->fillScreen(COL_BG);
 #if MAP_BLE
   if (appNavOn()) {                                                // v22.12: aplikasi MotorNav menggambar seluruh layar (peta + banner + kecepatan)
     if (mapFresh() && mapDecode(mapBuf[mapAct], mapLen[mapAct])) return;
-    drawRing(1.0f, COL_ORANGE);
-    drawCentered("Menunggu", 85, 3, COL_TEXT);
-    drawCentered("peta...", 118, 3, COL_DIM);
-    drawPageDots();
+    // v22.41: peta belum fresh -> biarkan tampilan sebelumnya saja (tidak lagi tampil "Menunggu peta...").
+    // nav.active hanya aktif setelah frame peta pertama datang, jadi kondisi ini seharusnya jarang/singkat.
     return;
   }
 #endif
+  gfx->fillScreen(COL_BG);
 
   if (!connected) {
     drawRing(1.0f, COL_RED);
@@ -5373,7 +5371,18 @@ void loop() {
   pollMusic(connected);                                            // detik lagu terus dihitung di semua halaman
   static Navigation nav;                                           // disalin tiap 40 ms saja (hemat heap, FPS naik)
   static uint32_t lastNavPoll = 0;
-  if (millis() - lastNavPoll >= 40) { lastNavPoll = millis(); if (appNavOn()) nav.active = true; else nav.active = false; }
+  static bool navMapReady = false;                                 // v22.41: true setelah frame peta pertama diterima utk sesi nav ini
+  if (millis() - lastNavPoll >= 40) {
+    lastNavPoll = millis();
+    bool wantNav = appNavOn();
+#if MAP_BLE
+    if (wantNav) { if (!navMapReady && mapStamp != 0) navMapReady = true; }
+    else navMapReady = false;
+    nav.active = wantNav && navMapReady;                           // tunggu peta siap dulu -> layar nav baru muncul otomatis saat peta ada
+#else
+    nav.active = wantNav;
+#endif
+  }
 
   if (callEndPending) { callEndPending = false; if (callActive) endCall(); }
   if (callStartPending) { callStartPending = false; if (!callActive) startCall(); }   // jika sudah berdering: hanya nama diperbarui
