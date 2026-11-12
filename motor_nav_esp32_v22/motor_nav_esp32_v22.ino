@@ -1147,8 +1147,14 @@ void drawNavPage(const Navigation &nav, bool connected) {
 #if MAP_BLE
   if (appNavOn()) {                                                // v22.12: aplikasi MotorNav menggambar seluruh layar (peta + banner + kecepatan)
     if (mapFresh() && mapDecode(mapBuf[mapAct], mapLen[mapAct])) return;
-    // v22.41: peta belum fresh -> biarkan tampilan sebelumnya saja (tidak lagi tampil "Menunggu peta...").
-    // nav.active hanya aktif setelah frame peta pertama datang, jadi kondisi ini seharusnya jarang/singkat.
+    // v22.42 fix: peta belum fresh (belum ada / baru putus) -> tampilkan status singkat alih-alih
+    // diam di frame terakhir atau nyangkut di layar standby.
+    gfx->fillScreen(COL_BG);
+    drawRing(1.0f, COL_ORANGE);
+    drawCentered("Memuat peta...", 85, 2, COL_TEXT);
+    drawCentered("pastikan aplikasi", 112, 2, COL_DIM);
+    drawCentered("tetap terbuka", 134, 2, COL_DIM);
+    drawPageDots();
     return;
   }
 #endif
@@ -4661,7 +4667,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.41"
+#define FW_VER "v22.42"
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -5371,17 +5377,14 @@ void loop() {
   pollMusic(connected);                                            // detik lagu terus dihitung di semua halaman
   static Navigation nav;                                           // disalin tiap 40 ms saja (hemat heap, FPS naik)
   static uint32_t lastNavPoll = 0;
-  static bool navMapReady = false;                                 // v22.41: true setelah frame peta pertama diterima utk sesi nav ini
   if (millis() - lastNavPoll >= 40) {
     lastNavPoll = millis();
-    bool wantNav = appNavOn();
-#if MAP_BLE
-    if (wantNav) { if (!navMapReady && mapStamp != 0) navMapReady = true; }
-    else navMapReady = false;
-    nav.active = wantNav && navMapReady;                           // tunggu peta siap dulu -> layar nav baru muncul otomatis saat peta ada
-#else
-    nav.active = wantNav;
-#endif
+    // v22.42 fix: v22.41 menunggu frame peta pertama sebelum nav.active aktif (navMapReady).
+    // Jika karena sebab apa pun frame peta itu tidak pernah sampai (BLE telat/gagal, HP lag dsb),
+    // nav.active tidak pernah true dan layar nyangkut di standby selamanya. Sekarang layar langsung
+    // keluar dari standby begitu aplikasi minta navigasi; drawNavPage menampilkan "Memuat peta..."
+    // sampai frame pertama tiba, alih-alih diam di layar standby.
+    nav.active = appNavOn();
   }
 
   if (callEndPending) { callEndPending = false; if (callActive) endCall(); }
