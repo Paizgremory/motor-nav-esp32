@@ -4668,6 +4668,7 @@ void bleWpEnd(uint32_t crc) {
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
 #define FW_VER "v22.42"
+#define DEBUG_NAV_OVERLAY 1   // v22.42: overlay debug sementara (hapus/ubah ke 0 kalau sudah tidak perlu)
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -5438,6 +5439,16 @@ void loop() {
   if (standby) {
     if (standbyMode == 1 && canvasOK) updatePhotoStandby(connected);
     else updateFace(connected);
+#if DEBUG_NAV_OVERLAY
+    {
+      char dbg[56];
+      snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
+               connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
+               (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
+      mapText(dbg, 4, 4, 1, COL_ORANGE);
+      fbDirty = true;
+    }
+#endif
     delay(1);
     return;
   }
@@ -5480,6 +5491,15 @@ void loop() {
       buildPalette(1.0f);
     }
     drawCurrentPage(nav, connected);
+#if DEBUG_NAV_OVERLAY
+    {                                                                  // v22.42: overlay debug sementara, pojok kiri atas
+      char dbg[56];
+      snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
+               connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
+               (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
+      mapText(dbg, 4, 4, 1, COL_ORANGE);
+    }
+#endif
     fbDirty = true;
   }
   tiltRefresh();
