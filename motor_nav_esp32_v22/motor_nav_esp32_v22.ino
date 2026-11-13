@@ -5445,7 +5445,7 @@ void loop() {
       snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
-      mapText(dbg, 4, 4, 1, COL_ORANGE);
+      drawCentered(dbg, 208, 1, COL_ORANGE);
       fbDirty = true;
     }
 #endif
@@ -5497,7 +5497,7 @@ void loop() {
       snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
-      mapText(dbg, 4, 4, 1, COL_ORANGE);
+      drawCentered(dbg, 208, 1, COL_ORANGE);
     }
 #endif
     fbDirty = true;
