@@ -4707,7 +4707,7 @@ void bleWpEnd(uint32_t crc) {
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
 #define FW_VER "v22.42"
-#define DEBUG_NAV_OVERLAY 1   // v22.42: overlay debug sementara (hapus/ubah ke 0 kalau sudah tidak perlu)
+#define DEBUG_NAV_OVERLAY 0   // v22.42: overlay debug dimatikan - bug navigasi sudah beres
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
 #else
@@ -5482,7 +5482,7 @@ void loop() {
     enterStandby(connected);
   }
   if (standby) {
-    if (standbyMode == 1 && canvasOK) updatePhotoStandby(connected);
+    if (standbyMode == 1 && canvasOK && fb) updatePhotoStandby(connected);  // v22.42 fix: mode foto/video butuh kanvas PENUH (fb, hanya ada bila TILT_UI); canvasOK saja bisa true dari kanvas kecil animasi boot -> dulu nyangkut diam, sekarang fallback ke wajah
     else updateFace(connected);
 #if DEBUG_NAV_OVERLAY
     {
