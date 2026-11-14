@@ -955,6 +955,11 @@ static volatile uint32_t mapStamp = 0;                             // millis() f
 static uint8_t  mapFid = 255, mapFill = 1;
 static uint16_t mapGot = 0, mapTot = 0;
 static volatile uint32_t dbgMapWrites = 0;   // v22.42: hitung semua onWrite() di karakteristik map (termasuk paket kontrol)
+static volatile uint32_t dbgCtrlPkts = 0;    // paket dikenali sbg kontrol (d[0]==0xFF)
+static volatile uint32_t dbgMapCand  = 0;    // paket LOLOS dari cek kontrol -> dianggap potongan peta
+static volatile uint32_t dbgMapBusy  = 0;    // ditolak krn bleWpBusy()
+static volatile uint32_t dbgMapBadSz = 0;    // ditolak krn n<6 / mapBuf belum siap
+static volatile uint32_t dbgMapBadTot= 0;    // ditolak krn tot==0 atau tot>MAP_BUF_SZ
 static volatile int mapConn = -1;                                  // handle koneksi HP-peta (dikenali dari tulisan pertama)
 static int mapTotalConn = 0;
 
@@ -966,6 +971,7 @@ class MapCharCb : public NimBLECharacteristicCallbacks {
     const uint8_t *d = v.data();
     size_t n = v.size();
     if (n >= 3 && d[0] == 0xFF) {                                  // paket kontrol dari aplikasi MotorNav
+      dbgCtrlPkts++;
       if (d[1] == 1 && n >= 5) { appH = d[2]; appM = d[3]; appS = d[4]; appClockMs = millis(); appClockNew = true; }
       else if (d[1] == 2) { appNav = d[2] != 0; appStamp = millis(); }
       else if (d[1] == 0x10 && n >= 6) bleWpBegin(d[2] | (d[3] << 8) | (d[4] << 16) | ((uint32_t)d[5] << 24));
@@ -1023,11 +1029,12 @@ class MapCharCb : public NimBLECharacteristicCallbacks {
       else if (d[1] == 0x12 && n >= 6) bleWpEnd(d[2] | (d[3] << 8) | (d[4] << 16) | ((uint32_t)d[5] << 24));
       return;
     }
-    if (bleWpBusy()) return;                                       // sedang upload wallpaper: frame peta diabaikan
-    if (n < 6 || !mapBuf[0] || !mapBuf[1]) return;
+    dbgMapCand++;
+    if (bleWpBusy()) { dbgMapBusy++; return; }                      // sedang upload wallpaper: frame peta diabaikan
+    if (n < 6 || !mapBuf[0] || !mapBuf[1]) { dbgMapBadSz++; return; }
     uint8_t fid = d[0];
     uint16_t off = d[1] | (d[2] << 8), tot = d[3] | (d[4] << 8);
-    if (tot == 0 || tot > MAP_BUF_SZ) return;
+    if (tot == 0 || tot > MAP_BUF_SZ) { dbgMapBadTot++; return; }
     if (fid != mapFid || tot != mapTot) { mapFid = fid; mapTot = tot; mapGot = 0; mapFill = mapAct ^ 1; }
     size_t pl = n - 5;
     if ((size_t)off + pl > tot) return;
@@ -5448,10 +5455,14 @@ void loop() {
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
       char dbg2[72];
-      snprintf(dbg2, sizeof(dbg2), "W%lu G%u T%u id%u",
-               (unsigned long)dbgMapWrites, (unsigned)mapGot, (unsigned)mapTot, (unsigned)mapFid);
-      drawCentered(dbg, 200, 1, COL_ORANGE);
-      drawCentered(dbg2, 216, 1, COL_ORANGE);
+      snprintf(dbg2, sizeof(dbg2), "W%lu Ct%lu Cd%lu",
+               (unsigned long)dbgMapWrites, (unsigned long)dbgCtrlPkts, (unsigned long)dbgMapCand);
+      char dbg3[72];
+      snprintf(dbg3, sizeof(dbg3), "Bz%lu Sz%lu To%lu T%u",
+               (unsigned long)dbgMapBusy, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot, (unsigned)mapTot);
+      drawCentered(dbg, 190, 1, COL_ORANGE);
+      drawCentered(dbg2, 205, 1, COL_ORANGE);
+      drawCentered(dbg3, 220, 1, COL_ORANGE);
       fbDirty = true;
     }
 #endif
@@ -5504,10 +5515,14 @@ void loop() {
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
       char dbg2[72];
-      snprintf(dbg2, sizeof(dbg2), "W%lu G%u T%u id%u",
-               (unsigned long)dbgMapWrites, (unsigned)mapGot, (unsigned)mapTot, (unsigned)mapFid);
-      drawCentered(dbg, 200, 1, COL_ORANGE);
-      drawCentered(dbg2, 216, 1, COL_ORANGE);
+      snprintf(dbg2, sizeof(dbg2), "W%lu Ct%lu Cd%lu",
+               (unsigned long)dbgMapWrites, (unsigned long)dbgCtrlPkts, (unsigned long)dbgMapCand);
+      char dbg3[72];
+      snprintf(dbg3, sizeof(dbg3), "Bz%lu Sz%lu To%lu T%u",
+               (unsigned long)dbgMapBusy, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot, (unsigned)mapTot);
+      drawCentered(dbg, 190, 1, COL_ORANGE);
+      drawCentered(dbg2, 205, 1, COL_ORANGE);
+      drawCentered(dbg3, 220, 1, COL_ORANGE);
     }
 #endif
     fbDirty = true;
