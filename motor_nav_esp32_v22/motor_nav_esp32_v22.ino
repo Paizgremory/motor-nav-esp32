@@ -5183,6 +5183,14 @@ void setup() {
 #if MAP_BLE
   NimBLEDevice::init("Motor Nav");                                 // v22.38: BLE dulu, sebelum buffer peta (BLE butuh blok RAM besar)
   Serial.printf("[boot] BLE init OK | heap %u | blok terbesar %u\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  // v22.42 fix: buffer peta (paling kritis utk navigasi) direbut DULUAN di sini, SEBELUM server/
+  // service/characteristic/advertising BLE dibuat dan sebelum jdPool/artBuf. Sebelumnya buffer peta
+  // dialokasikan PALING TERAKHIR, jadi sering kehabisan RAM (mapBuf[1] gagal) gara-gara keduluan
+  // dimakan objek BLE + jdPool + artBuf -> semua data peta ditolak diam-diam, LCD nyangkut di
+  // "Memuat peta..." selamanya walau aplikasi sukses mengirim ratusan frame.
+  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
+  mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
+  Serial.printf("[boot] buffer peta %p %p | heap %u\n", mapBuf[0], mapBuf[1], (unsigned)ESP.getFreeHeap());
   NimBLEServer *msrv = NimBLEDevice::createServer();
   msrv->setCallbacks(&mapSrvCb, false);
   NimBLEService *msvc = msrv->createService(MAP_SVC_UUID);
@@ -5202,8 +5210,6 @@ void setup() {
     adv->enableScanResponse(true);
     adv->start();
   }
-  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);                       // v22.38: buffer peta/sampul dialokasi setelah BLE menyala
-  mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
   if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
   artBuf = (uint16_t *)malloc(ART_BYTES);
   Serial.printf("[boot] setup selesai | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
