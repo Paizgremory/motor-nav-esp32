@@ -954,11 +954,13 @@ static volatile uint16_t mapLen[2] = {0, 0};
 static volatile uint32_t mapStamp = 0;                             // millis() frame lengkap terakhir (0 = belum ada)
 static uint8_t  mapFid = 255, mapFill = 1;
 static uint16_t mapGot = 0, mapTot = 0;
+static volatile uint32_t dbgMapWrites = 0;   // v22.42: hitung semua onWrite() di karakteristik map (termasuk paket kontrol)
 static volatile int mapConn = -1;                                  // handle koneksi HP-peta (dikenali dari tulisan pertama)
 static int mapTotalConn = 0;
 
 class MapCharCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &ci) override {
+    dbgMapWrites++;
     mapConn = ci.getConnHandle();
     NimBLEAttValue v = c->getValue();
     const uint8_t *d = v.data();
@@ -5441,11 +5443,15 @@ void loop() {
     else updateFace(connected);
 #if DEBUG_NAV_OVERLAY
     {
-      char dbg[56];
+      char dbg[72];
       snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
-      drawCentered(dbg, 208, 1, COL_ORANGE);
+      char dbg2[72];
+      snprintf(dbg2, sizeof(dbg2), "W%lu G%u T%u id%u",
+               (unsigned long)dbgMapWrites, (unsigned)mapGot, (unsigned)mapTot, (unsigned)mapFid);
+      drawCentered(dbg, 200, 1, COL_ORANGE);
+      drawCentered(dbg2, 216, 1, COL_ORANGE);
       fbDirty = true;
     }
 #endif
@@ -5493,11 +5499,15 @@ void loop() {
     drawCurrentPage(nav, connected);
 #if DEBUG_NAV_OVERLAY
     {                                                                  // v22.42: overlay debug sementara, pojok kiri atas
-      char dbg[56];
+      char dbg[72];
       snprintf(dbg, sizeof(dbg), "C%d N%d L%d M%lu F%d A%d",
                connected ? 1 : 0, appNav ? 1 : 0, appLinked() ? 1 : 0,
                (unsigned long)mapStamp, mapFresh() ? 1 : 0, nav.active ? 1 : 0);
-      drawCentered(dbg, 208, 1, COL_ORANGE);
+      char dbg2[72];
+      snprintf(dbg2, sizeof(dbg2), "W%lu G%u T%u id%u",
+               (unsigned long)dbgMapWrites, (unsigned)mapGot, (unsigned)mapTot, (unsigned)mapFid);
+      drawCentered(dbg, 200, 1, COL_ORANGE);
+      drawCentered(dbg2, 216, 1, COL_ORANGE);
     }
 #endif
     fbDirty = true;
