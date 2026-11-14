@@ -2655,6 +2655,53 @@ bool sdOK = false;
 static void sdWallClose() {}
 #endif
 
+#if HAVE_ROM_JPEG
+// v22.42 fix: mesin decode JPEG peta dipindah KELUAR dari blok TILT_UI, supaya tetap bisa dipakai
+// walau TILT_UI false (kanvas penuh 115 KB dimatikan demi RAM buffer peta). Sebelumnya mapDecode()
+// WAJIB ada `fb` (kanvas penuh) krn jdOut lama menulis langsung ke fb->row(y); kalau TILT_UI false,
+// fb selalu null -> mapDecode selalu return false -> peta tak pernah tergambar walau datanya sudah
+// lengkap diterima (mapFresh() true). Sekarang mapDecode menggambar langsung ke panel fisik per blok
+// JPEG (draw16bitRGBBitmap), tidak butuh buffer RAM besar sama sekali.
+static const uint8_t *jdSrc = nullptr;
+static uint32_t jdLen = 0, jdPos = 0;
+
+static UINT jdIn(JDEC *jd, BYTE *buf, UINT n) {                    // baca data frame dari RAM (buf null = lewati)
+  (void)jd;
+  if (jdPos + n > jdLen) n = jdLen - jdPos;
+  if (buf) memcpy(buf, jdSrc + jdPos, n);
+  jdPos += n;
+  return n;
+}
+
+static UINT jdOutMap(JDEC *jd, void *bmp, JRECT *r) {               // blok RGB888 hasil decode -> langsung ke panel fisik
+  (void)jd;
+  const uint8_t *p = (const uint8_t *)bmp;
+  int w = r->right - r->left + 1, h = r->bottom - r->top + 1;
+  if (w <= 0 || h <= 0 || w > 32 || h > 32 || r->left >= 240 || r->top >= 240) return 1;
+  int cw = (r->left + w > 240) ? (240 - r->left) : w;              // kliping jaga-jaga di tepi kanan
+  int ch = (r->top + h > 240) ? (240 - r->top) : h;
+  static uint16_t blk[32 * 32];
+  int idx = 0;
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++, p += 3)
+      if (y < ch && x < cw) blk[idx++] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
+  if (cw > 0 && ch > 0) panel->draw16bitRGBBitmap(r->left, r->top, blk, cw, ch);
+  return 1;
+}
+
+bool mapDecode(const uint8_t *p, uint32_t len) {                   // JPEG 240x240 dari RAM -> panel langsung (tanpa fb)
+  if (!jdPool || !p || len < 100) return false;
+  jdSrc = p; jdLen = len; jdPos = 0;
+  JDEC jd;
+  JRESULT rc = jd_prepare(&jd, jdIn, jdPool, JD_POOL, nullptr);
+  if (rc == JDR_OK && (jd.width != 240 || jd.height != 240)) rc = JDR_PAR;
+  if (rc == JDR_OK) rc = jd_decomp(&jd, jdOutMap, 0);
+  return rc == JDR_OK;
+}
+#else
+bool mapDecode(const uint8_t *, uint32_t) { return false; }
+#endif
+
 #if TILT_UI
 uint16_t rbwCol[256];
 float    rbwC[1024], rbwS[1024];
@@ -2680,17 +2727,9 @@ void rbwSetup() {
 }
 
 #if HAVE_ROM_JPEG
-static const uint8_t *jdSrc = nullptr;
-static uint32_t jdLen = 0, jdPos = 0;
-
-static UINT jdIn(JDEC *jd, BYTE *buf, UINT n) {                    // baca data frame dari flash (buf null = lewati)
-  (void)jd;
-  if (jdPos + n > jdLen) n = jdLen - jdPos;
-  if (buf) memcpy(buf, jdSrc + jdPos, n);
-  jdPos += n;
-  return n;
-}
-
+// v22.42: jdSrc/jdLen/jdPos/jdIn sekarang didefinisikan sekali di luar blok TILT_UI (lihat atas) agar
+// bisa dipakai mapDecode() walau TILT_UI false; vidDecode() di bawah ini tetap memakainya (sama-sama
+// variabel global static, tidak perlu dideklarasi ulang di sini).
 static UINT jdOut(JDEC *jd, void *bmp, JRECT *r) {                 // blok RGB888 hasil decode -> kanvas RGB565
   (void)jd;
   const uint8_t *p = (const uint8_t *)bmp;
@@ -2725,18 +2764,8 @@ bool vidDecode(int i) {
   return rc == JDR_OK;
 }
 
-bool mapDecode(const uint8_t *p, uint32_t len) {                   // JPEG 240x240 dari RAM -> kanvas
-  if (!jdPool || !fb || !p || len < 100) return false;
-  jdSrc = p; jdLen = len; jdPos = 0;
-  JDEC jd;
-  JRESULT rc = jd_prepare(&jd, jdIn, jdPool, JD_POOL, nullptr);
-  if (rc == JDR_OK && (jd.width != 240 || jd.height != 240)) rc = JDR_PAR;
-  if (rc == JDR_OK) rc = jd_decomp(&jd, jdOut, 0);
-  return rc == JDR_OK;
-}
 #else
 bool vidDecode(int) { return false; }
-bool mapDecode(const uint8_t *, uint32_t) { return false; }
 #endif
 
 static inline uint16_t blend565(uint16_t bg, uint16_t fg, int a) {   // a: 0..256
@@ -2945,8 +2974,7 @@ void updatePhotoStandby(bool connected) {
   present();
 }
 #else
-void updatePhotoStandby(bool connected) { (void)connected; }
-bool mapDecode(const uint8_t *, uint32_t) { return false; }
+void updatePhotoStandby(bool connected) { (void)connected; }   // v22.42: mapDecode() TIDAK lagi di-stub di sini, tersedia walau TILT_UI false (lihat atas)
 #endif
 
 void updateFace(bool connected) {
