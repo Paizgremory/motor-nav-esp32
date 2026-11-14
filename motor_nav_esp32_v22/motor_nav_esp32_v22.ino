@@ -958,7 +958,8 @@ static volatile uint32_t dbgMapWrites = 0;   // v22.42: hitung semua onWrite() d
 static volatile uint32_t dbgCtrlPkts = 0;    // paket dikenali sbg kontrol (d[0]==0xFF)
 static volatile uint32_t dbgMapCand  = 0;    // paket LOLOS dari cek kontrol -> dianggap potongan peta
 static volatile uint32_t dbgMapBusy  = 0;    // ditolak krn bleWpBusy()
-static volatile uint32_t dbgMapBadSz = 0;    // ditolak krn n<6 / mapBuf belum siap
+static volatile uint32_t dbgMapBadSz = 0;    // ditolak krn n<6
+static volatile uint32_t dbgMapNoBuf = 0;    // ditolak krn mapBuf[0]/[1] == NULL (gagal alokasi saat boot)
 static volatile uint32_t dbgMapBadTot= 0;    // ditolak krn tot==0 atau tot>MAP_BUF_SZ
 static volatile int mapConn = -1;                                  // handle koneksi HP-peta (dikenali dari tulisan pertama)
 static int mapTotalConn = 0;
@@ -1031,7 +1032,8 @@ class MapCharCb : public NimBLECharacteristicCallbacks {
     }
     dbgMapCand++;
     if (bleWpBusy()) { dbgMapBusy++; return; }                      // sedang upload wallpaper: frame peta diabaikan
-    if (n < 6 || !mapBuf[0] || !mapBuf[1]) { dbgMapBadSz++; return; }
+    if (!mapBuf[0] || !mapBuf[1]) { dbgMapNoBuf++; return; }         // v22.42: buffer peta gagal dialokasi saat boot
+    if (n < 6) { dbgMapBadSz++; return; }
     uint8_t fid = d[0];
     uint16_t off = d[1] | (d[2] << 8), tot = d[3] | (d[4] << 8);
     if (tot == 0 || tot > MAP_BUF_SZ) { dbgMapBadTot++; return; }
@@ -5458,11 +5460,15 @@ void loop() {
       snprintf(dbg2, sizeof(dbg2), "W%lu Ct%lu Cd%lu",
                (unsigned long)dbgMapWrites, (unsigned long)dbgCtrlPkts, (unsigned long)dbgMapCand);
       char dbg3[72];
-      snprintf(dbg3, sizeof(dbg3), "Bz%lu Sz%lu To%lu T%u",
-               (unsigned long)dbgMapBusy, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot, (unsigned)mapTot);
-      drawCentered(dbg, 190, 1, COL_ORANGE);
-      drawCentered(dbg2, 205, 1, COL_ORANGE);
-      drawCentered(dbg3, 220, 1, COL_ORANGE);
+      snprintf(dbg3, sizeof(dbg3), "Bz%lu NB%lu Sz%lu To%lu",
+               (unsigned long)dbgMapBusy, (unsigned long)dbgMapNoBuf, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot);
+      char dbg4[72];
+      snprintf(dbg4, sizeof(dbg4), "buf%d%d heap%u",
+               mapBuf[0] ? 1 : 0, mapBuf[1] ? 1 : 0, (unsigned)ESP.getFreeHeap());
+      drawCentered(dbg, 180, 1, COL_ORANGE);
+      drawCentered(dbg2, 194, 1, COL_ORANGE);
+      drawCentered(dbg3, 208, 1, COL_ORANGE);
+      drawCentered(dbg4, 222, 1, COL_ORANGE);
       fbDirty = true;
     }
 #endif
@@ -5518,11 +5524,15 @@ void loop() {
       snprintf(dbg2, sizeof(dbg2), "W%lu Ct%lu Cd%lu",
                (unsigned long)dbgMapWrites, (unsigned long)dbgCtrlPkts, (unsigned long)dbgMapCand);
       char dbg3[72];
-      snprintf(dbg3, sizeof(dbg3), "Bz%lu Sz%lu To%lu T%u",
-               (unsigned long)dbgMapBusy, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot, (unsigned)mapTot);
-      drawCentered(dbg, 190, 1, COL_ORANGE);
-      drawCentered(dbg2, 205, 1, COL_ORANGE);
-      drawCentered(dbg3, 220, 1, COL_ORANGE);
+      snprintf(dbg3, sizeof(dbg3), "Bz%lu NB%lu Sz%lu To%lu",
+               (unsigned long)dbgMapBusy, (unsigned long)dbgMapNoBuf, (unsigned long)dbgMapBadSz, (unsigned long)dbgMapBadTot);
+      char dbg4[72];
+      snprintf(dbg4, sizeof(dbg4), "buf%d%d heap%u",
+               mapBuf[0] ? 1 : 0, mapBuf[1] ? 1 : 0, (unsigned)ESP.getFreeHeap());
+      drawCentered(dbg, 180, 1, COL_ORANGE);
+      drawCentered(dbg2, 194, 1, COL_ORANGE);
+      drawCentered(dbg3, 208, 1, COL_ORANGE);
+      drawCentered(dbg4, 222, 1, COL_ORANGE);
     }
 #endif
     fbDirty = true;
