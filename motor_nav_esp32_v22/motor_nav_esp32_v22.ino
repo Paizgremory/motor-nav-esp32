@@ -432,7 +432,7 @@ struct Navigation;                                          // v22.37: deklarasi
 #define SPI_HZ           80000000UL // turunkan ke 40000000UL jika layar muncul noise
 
 // --- Kanvas penuh (dipakai standby foto/video, wajah, notifikasi, game; v22.35: sudut miring MPU6050 dihapus, tampilan selalu tegak) ---
-#define TILT_UI       true     // true: alokasikan kanvas penuh 240x240 (butuh ~115 KB RAM; dibutuhkan standby mode 1 foto/video)
+#define TILT_UI       false    // v22.42: dimatikan - 115 KB RAM-nya dipakai buffer peta (MAP_BLE) spy navigasi jalan. Mode standby foto/video & layar miring otomatis nonaktif, fallback ke wajah.
                                // false: matikan kanvas penuh (kembali ke gambar langsung ke layar, hemat memori)
 // --- Buzzer (aktif: bunyi saat pin HIGH) ---
 #define BUZZER_ON true
