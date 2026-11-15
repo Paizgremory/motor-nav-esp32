@@ -435,8 +435,9 @@ struct Navigation;                                          // v22.37: deklarasi
 #define SPI_HZ           80000000UL // turunkan ke 40000000UL jika layar muncul noise
 
 // --- Kanvas penuh (dipakai standby foto/video, wajah, notifikasi, game; v22.35: sudut miring MPU6050 dihapus, tampilan selalu tegak) ---
-#define TILT_UI       true     // v22.42b: dinyalakan lagi - navigasi sekarang TIDAK butuh kanvas (lihat mapDecode v22.42), dan setup() akan
-                               // otomatis membebaskan kanvas ini kalau RAM kurang buat buffer peta/BLE (lihat blok "jaga-jaga" di setup()).
+#define TILT_UI       true     // v22.42c: dinyalakan lagi - kanvas (wajah/foto-video/game) dan buffer navigasi "gantian"
+                               // pakai RAM yang sama (lihat navRamEnsure()): kanvas aktif waktu standby, otomatis
+                               // minggir begitu app mulai navigasi, lalu balik lagi begitu navigasi selesai.
                                // false: matikan kanvas penuh (kembali ke gambar langsung ke layar, hemat memori)
 // --- Buzzer (aktif: bunyi saat pin HIGH) ---
 #define BUZZER_ON true
@@ -1019,10 +1020,13 @@ class MapCharCb : public NimBLECharacteristicCallbacks {
         memcpy(cfg, d + 2, k); cfgClamp(); cfgDirtyAt = millis();
       }
       else if (d[1] == 0x34 && n >= 3) { accVibTarget = d[2] / 255.0f; accVibStamp = millis(); }             // v22.36: getar jalan dari akselerometer HP
-      else if (d[1] == 0x26 && n >= 5 && artBuf) {                                                          // sampul album (berurutan)
-        uint16_t off = d[2] | (d[3] << 8); size_t k = n - 4;
-        if (off == 0) { artGot = 0; artOn = false; }
-        if (off == artGot && (size_t)off + k <= ART_BYTES) { memcpy((uint8_t *)artBuf + off, d + 4, k); artGot = off + k; }
+      else if (d[1] == 0x26 && n >= 5) {                                                                     // sampul album (berurutan)
+        if (!artBuf) artBuf = (uint16_t *)malloc(ART_BYTES);   // v22.42c: artBuf skrg bisa dibebaskan saat navigasi aktif; alokasi lagi kalau perlu
+        if (artBuf) {
+          uint16_t off = d[2] | (d[3] << 8); size_t k = n - 4;
+          if (off == 0) { artGot = 0; artOn = false; }
+          if (off == artGot && (size_t)off + k <= ART_BYTES) { memcpy((uint8_t *)artBuf + off, d + 4, k); artGot = off + k; }
+        }
       }
       else if (d[1] == 0x27 && n >= 3) artOn = (d[2] != 0) && artBuf && artGot >= ART_BYTES;                                                                  // telepon selesai
       else if (d[1] == 0x2A && n >= 6) bleOtaBegin(d[2] | (d[3] << 8) | (d[4] << 16) | ((uint32_t)d[5] << 24));          // v22.31: OTA mulai
@@ -4599,7 +4603,10 @@ static uint32_t wpCrc(uint32_t c, const uint8_t *p, size_t n) {    // CRC-32 sta
 
 bool bleWpBusy() { return wpUp >= 1 && wpUp <= 3; }
 
+static void ensureScratch0();  // v22.42c: didefinisikan dekat navRamEnsure() di bawah; rebut mapBuf[0] dari kanvas kalau sedang kosong
+
 void bleWpBegin(uint32_t size, uint8_t tgt, uint16_t slot) {       // dipanggil dari tugas BLE
+  ensureScratch0();                                                // v22.42c
   wpUpTgt = tgt ? 1 : 0;
 #if HAVE_SD
   wpUpSlot = sdOK ? slot : 0;                                      // v22.30: animasi boot juga punya slot (/boot/bNNNNN.mnv)
@@ -4742,6 +4749,7 @@ static void otaAbortNow() {
 static void otaFail() { wpUpSet(5); }                              // slot dibuang di otaTick() (loop)
 
 void bleOtaBegin(uint32_t size) {                                  // tugas BLE: hanya memeriksa, esp_ota_begin dikerjakan di loop()
+  ensureScratch0();                                                // v22.42c
   if (bleWpBusy() && !otaMode) return;                             // upload wallpaper sedang jalan: abaikan
 #if HAVE_SD
   wpUpSd = false;                                                  // sisa upload wallpaper ke SD tidak boleh ikut campur
@@ -5220,9 +5228,10 @@ void setup() {
   // dialokasikan PALING TERAKHIR, jadi sering kehabisan RAM (mapBuf[1] gagal) gara-gara keduluan
   // dimakan objek BLE + jdPool + artBuf -> semua data peta ditolak diam-diam, LCD nyangkut di
   // "Memuat peta..." selamanya walau aplikasi sukses mengirim ratusan frame.
-  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
-  mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
-  Serial.printf("[boot] buffer peta %p %p | heap %u\n", mapBuf[0], mapBuf[1], (unsigned)ESP.getFreeHeap());
+  // v22.42c: buffer peta TIDAK dialokasi di sini lagi. RAM motor ini tidak cukup utk kanvas 115 KB
+  // (wajah/foto-video) + buffer navigasi sekaligus -> keduanya "gantian" lewat navRamEnsure(), dipanggil
+  // tiap loop() berdasarkan status navigasi (lihat definisi navRamEnsure di bawah).
+  Serial.printf("[boot] buffer peta ditunda (gantian dgn kanvas) | heap %u\n", (unsigned)ESP.getFreeHeap());
   NimBLEServer *msrv = NimBLEDevice::createServer();
   msrv->setCallbacks(&mapSrvCb, false);
   NimBLEService *msvc = msrv->createService(MAP_SVC_UUID);
@@ -5242,27 +5251,59 @@ void setup() {
     adv->enableScanResponse(true);
     adv->start();
   }
-  if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
-  artBuf = (uint16_t *)malloc(ART_BYTES);
-  Serial.printf("[boot] setup selesai | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
+  // v22.42c: jdPool & artBuf juga ditunda, sama seperti mapBuf (lihat komentar di atas) - dialokasi oleh
+  // navRamEnsure() saat navigasi benar-benar dimulai.
+  Serial.printf("[boot] setup selesai | kanvas %s | heap %u\n", canvasOK ? "OK" : "nonaktif", (unsigned)ESP.getFreeHeap());
+#endif
+}
 
-  // v22.42b: jaga-jaga - kalau TILT_UI true dan kanvas (115 KB) kebetulan menyita RAM sampai salah satu
-  // buffer navigasi di atas gagal dialokasi, BEBASKAN kanvas sekarang juga (pola sama persis dengan mode
-  // WiFi upload) lalu coba lagi. Navigasi selalu menang; foto/video standby cuma dapat RAM kalau sisa cukup.
-  if ((!mapBuf[0] || !mapBuf[1] || !jdPool || !artBuf) && canvasOK && fb) {
-    Serial.println("[boot] RAM kurang utk buffer navigasi -> bebaskan kanvas (foto/video standby nonaktif kali ini), prioritas navigasi");
+#if MAP_BLE
+// v22.42c: mapBuf[0] dipakai BERSAMA oleh 3 fitur (peta navigasi, upload wallpaper, OTA firmware) sebagai
+// penyangga serbaguna. Kalau sedang kosong (lagi "gantian" dgn kanvas) dan tiba2 dibutuhkan salah satu dari
+// upload/OTA, rebut sekarang juga dari kanvas - dipanggil di awal bleWpBegin()/bleOtaBegin().
+static void ensureScratch0() {
+  if (mapBuf[0]) return;
+  if (canvasOK && fb) {
     for (int i = 0; i < SplitCanvas::SN; i++) { free(fb->s[i]); fb->s[i] = nullptr; }
-    canvasOK = false;
-    cv = nullptr;
-    gfx = panel;
-    if (!mapBuf[0]) mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
+    canvasOK = false; cv = nullptr; gfx = panel;
+  }
+  mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
+}
+
+// v22.42c: "gantian" - navigasi dan kanvas (wajah/foto-video/game) berebut RAM yang sama, jadi tidak
+// pernah aktif berdua sekaligus. Dipanggil tiap loop() dengan status navigasi app sekarang (true/false);
+// hanya bertindak kalau statusnya BERUBAH dari sebelumnya.
+bool navRamActive = false;
+void navRamEnsure(bool wantNav) {
+  if (wantNav == navRamActive) return;
+  navRamActive = wantNav;
+  if (wantNav) {                                                  // navigasi mulai -> kanvas minggir, buffer peta masuk
+    if (canvasOK && fb) {
+      for (int i = 0; i < SplitCanvas::SN; i++) { free(fb->s[i]); fb->s[i] = nullptr; }
+      canvasOK = false; cv = nullptr; gfx = panel;
+    }
+    ensureScratch0();                                              // mapBuf[0]: sekali dialokasi, TIDAK pernah dibebaskan lagi
+                                                                     // (dipakai juga oleh upload wallpaper/OTA kapan saja, lihat ensureScratch0())
     if (!mapBuf[1]) mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
     if (!jdPool)    jdPool    = (uint8_t *)malloc(JD_POOL);
     if (!artBuf)    artBuf    = (uint16_t *)malloc(ART_BYTES);
-    Serial.printf("[boot] setelah bebaskan kanvas | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
+    Serial.printf("[navRAM] navigasi ON, kanvas OFF | peta %p %p pool %p art %p | heap %u\n",
+                  mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
+  } else {                                                         // navigasi selesai -> mapBuf[1]/jdPool/artBuf keluar, kanvas balik
+                                                                     // (mapBuf[0] SENGAJA tidak dibebaskan, lihat komentar di atas)
+    if (mapBuf[1]) { free(mapBuf[1]); mapBuf[1] = nullptr; }
+    if (jdPool)    { free(jdPool);    jdPool    = nullptr; }
+    if (artBuf)    { free(artBuf);    artBuf    = nullptr; }
+    if (!canvasOK) {
+      if (!fb) fb = new SplitCanvas();
+      canvasOK = fb->begin(CANVAS_BEGIN_ARG);
+      if (canvasOK) { cv = fb; gfx = fb; fbDirty = true; }
+      else { gfx = panel; Serial.println("[navRAM] kanvas gagal dialokasi ulang setelah navigasi selesai"); }
+    }
+    Serial.printf("[navRAM] navigasi OFF, kanvas %s | heap %u\n", canvasOK ? "ON" : "GAGAL", (unsigned)ESP.getFreeHeap());
   }
-#endif
 }
+#endif
 
 
 // v22.18: halaman yang bisa dipilih lewat sentuhan hanya game; Navigasi muncul otomatis saat navigasi dimulai dari aplikasi
@@ -5421,6 +5462,9 @@ int clockMinutes(bool connected) {
 }
 
 void loop() {
+#if MAP_BLE
+  navRamEnsure(appNavOn());          // v22.42c: tukar RAM kanvas<->navigasi di awal setiap loop, sebelum dipakai di bawah
+#endif
   updateBuzzer();
   handleTouch();
   tiltTick();                                                      // v22.35: tidak lagi membaca sudut miring (no-op, tampilan selalu tegak)
