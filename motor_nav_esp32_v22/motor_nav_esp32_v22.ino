@@ -5274,10 +5274,21 @@ static void ensureScratch0() {
 // pernah aktif berdua sekaligus. Dipanggil tiap loop() dengan status navigasi app sekarang (true/false);
 // hanya bertindak kalau statusnya BERUBAH dari sebelumnya.
 bool navRamActive = false;
+static uint32_t canvasRetryAt = 0;        // v22.42d: 0 = tidak ada percobaan ulang tertunda
+
+static bool tryCanvasBack() {             // v22.42d: coba alokasi ulang kanvas; dipakai navRamEnsure() & retry berkala
+  if (!fb) fb = new SplitCanvas();
+  canvasOK = fb->begin(CANVAS_BEGIN_ARG);
+  if (canvasOK) { cv = fb; gfx = fb; fbDirty = true; canvasRetryAt = 0; }
+  else gfx = panel;
+  return canvasOK;
+}
+
 void navRamEnsure(bool wantNav) {
   if (wantNav == navRamActive) return;
   navRamActive = wantNav;
   if (wantNav) {                                                  // navigasi mulai -> kanvas minggir, buffer peta masuk
+    canvasRetryAt = 0;                                             // batalkan percobaan ulang yg masih tertunda, kanvas memang harus minggir sekarang
     if (canvasOK && fb) {
       for (int i = 0; i < SplitCanvas::SN; i++) { free(fb->s[i]); fb->s[i] = nullptr; }
       canvasOK = false; cv = nullptr; gfx = panel;
@@ -5294,14 +5305,19 @@ void navRamEnsure(bool wantNav) {
     if (mapBuf[1]) { free(mapBuf[1]); mapBuf[1] = nullptr; }
     if (jdPool)    { free(jdPool);    jdPool    = nullptr; }
     if (artBuf)    { free(artBuf);    artBuf    = nullptr; }
-    if (!canvasOK) {
-      if (!fb) fb = new SplitCanvas();
-      canvasOK = fb->begin(CANVAS_BEGIN_ARG);
-      if (canvasOK) { cv = fb; gfx = fb; fbDirty = true; }
-      else { gfx = panel; Serial.println("[navRAM] kanvas gagal dialokasi ulang setelah navigasi selesai"); }
+    if (!canvasOK && !tryCanvasBack()) {
+      canvasRetryAt = millis() + 2000;   // v22.42d: gagal (kemungkinan RAM masih dipakai sesi BLE) -> coba lagi tiap 2 dtk
+      Serial.println("[navRAM] kanvas gagal dialokasi ulang, akan dicoba lagi tiap 2 dtk");
     }
     Serial.printf("[navRAM] navigasi OFF, kanvas %s | heap %u\n", canvasOK ? "ON" : "GAGAL", (unsigned)ESP.getFreeHeap());
   }
+}
+
+// v22.42d: dipanggil tiap loop(); kalau ada percobaan ulang kanvas tertunda (lihat atas) dan waktunya tiba, coba lagi.
+void navRamRetryTick() {
+  if (!canvasRetryAt || navRamActive || millis() < canvasRetryAt) return;
+  if (tryCanvasBack()) Serial.printf("[navRAM] kanvas berhasil dialokasi ulang (percobaan berikutnya) | heap %u\n", (unsigned)ESP.getFreeHeap());
+  else canvasRetryAt = millis() + 2000;
 }
 #endif
 
@@ -5464,6 +5480,7 @@ int clockMinutes(bool connected) {
 void loop() {
 #if MAP_BLE
   navRamEnsure(appNavOn());          // v22.42c: tukar RAM kanvas<->navigasi di awal setiap loop, sebelum dipakai di bawah
+  navRamRetryTick();                 // v22.42d: kalau kanvas gagal balik tadi, coba lagi tiap 2 dtk
 #endif
   updateBuzzer();
   handleTouch();
