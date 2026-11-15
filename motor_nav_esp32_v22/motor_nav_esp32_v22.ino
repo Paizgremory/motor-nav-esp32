@@ -1,11 +1,4 @@
 /*
-  v22.43: STANDBY FOTO/VIDEO JALAN TANPA KANVAS PENUH (TILT_UI tetap false, tidak bentrok RAM dgn
-  navigasi). Latar foto/video digambar LANGSUNG ke panel fisik (pola sama dgn mapDecode() utk peta),
-  tanpa buffer besar. Keterbatasan versi ini: jam tampil TAPI belum transparan (kotak solid di
-  belakang angka), belum ada visualizer/sampul album/kartu pemutar (butuh baca-balik piksel, panel
-  SPI write-only). Cincin standby: warna berganti tiap ~90ms (bukan gradien pelangi mulus spt versi
-  TILT_UI lama). Lihat updatePhotoStandby() di bagian "#else" setelah blok #if TILT_UI.
-
   v22.37: MENU LCD -> MODE UPLOAD WIFI LANGSUNG (juga di ESP32-C3). Di Pengaturan, item WALLPAPER dan ANIMASI BOOT: pada board tanpa microSD (C3)
   TAHAN sensor = langsung masuk mode WiFi (BLE dimatikan, ESP32 membuat WiFi "MotorNav", sandi motornav1234, alamat 192.168.4.1; layar menampilkan
   judul UPLOAD WALLPAPER / UPLOAD ANIM BOOT). Item UPLOAD WIFI kini tampil di semua board. Berkas ditulis ke partisi flash (foto 115 KB -> spiffs,
@@ -2984,86 +2977,7 @@ void updatePhotoStandby(bool connected) {
   present();
 }
 #else
-// v22.43: STANDBY FOTO/VIDEO TANPA KANVAS PENUH. Latar (foto/video) digambar LANGSUNG ke panel
-// fisik, sama seperti mapDecode() untuk peta — TIDAK butuh buffer 115 KB, TIDAK bentrok dengan
-// buffer peta (MAP_BLE). Keterbatasan: jam BELUM transparan (kotak solid di belakangnya), belum
-// ada visualizer/sampul/kartu pemutar (butuh baca-balik piksel, panel SPI write-only tidak bisa).
-static uint16_t rbwColP[32];
-static bool     rbwPInit = false;
-static float    rbwRotP = 0;
-static uint32_t lastBgDraw = 0, lastClockDraw = 0, lastRingDraw = 0;
-static int      lastVidIdxP = -1;
-static bool     bgPaintedP = false;
-
-static void rbwSetupP() {
-  for (int i = 0; i < 32; i++) {
-    float h = i / 5.3333f; int sx = (int)h; float f = h - sx;
-    uint8_t q = (uint8_t)(255 * (1 - f)), t = (uint8_t)(255 * f), r = 0, g = 0, b = 0;
-    switch (sx % 6) {
-      case 0: r = 255; g = t; b = 0; break;
-      case 1: r = q; g = 255; b = 0; break;
-      case 2: r = 0; g = 255; b = t; break;
-      case 3: r = 0; g = q; b = 255; break;
-      case 4: r = t; g = 0; b = 255; break;
-      default: r = 255; g = 0; b = q; break;
-    }
-    rbwColP[i] = panel->color565(r, g, b);
-  }
-  rbwPInit = true;
-}
-
-static bool drawPhotoBgP() {                       // foto diam: langsung dari flash, tanpa RAM tambahan
-  for (int y = 0; y < 240; y += 20)
-    panel->draw16bitRGBBitmap(0, y, (uint16_t *)(photoPtr + y * 240), 240, 20);
-  return true;
-}
-
-static bool drawVideoBgP(int vi) {                  // frame video JPEG 240x240 -> panel langsung (mapDecode)
-#if HAVE_SD
-  if (sdVid) {
-    const uint8_t *fp; uint32_t len;
-    if (!sdw.frame(vi, fp, len)) return false;
-    return mapDecode(fp, len);
-  }
-#endif
-  if (!vidTab) return false;
-  return mapDecode(vidBase + vidTab[vi * 2], vidTab[vi * 2 + 1]);
-}
-
-void updatePhotoStandby(bool connected) {
-  uint32_t now = millis();
-  if (!rbwPInit) rbwSetupP();
-
-  int vi = -1;
-  bool needBg = false;
-  if (vidOK) {
-    vi = (int)(((uint64_t)now * vidFps / 1000) % vidN);
-    if (vi != lastVidIdxP) { needBg = true; lastVidIdxP = vi; }
-  } else if (!bgPaintedP || now - lastBgDraw > 5000) {
-    needBg = true;
-  }
-  if (needBg) {
-    bool ok = (vi >= 0) ? drawVideoBgP(vi) : drawPhotoBgP();
-    if (ok) { bgPaintedP = true; lastBgDraw = now; }
-  }
-
-  if (now - lastClockDraw > 1000) {                 // jam (OPAK, belum tembus pandang)
-    lastClockDraw = now;
-    int cm = clockMinutes(connected);
-    char buf[8];
-    if (cm >= 0) snprintf(buf, sizeof(buf), "%02d:%02d", cm / 60, cm % 60); else strcpy(buf, "--:--");
-    panel->fillRect(26, 96, 188, 50, panel->color565(0, 0, 0));
-    drawCentered(buf, 108, 4, 0xFFFF);
-  }
-
-  if (now - lastRingDraw > 90) {                    // cincin: warna berganti (bukan pelangi mulus asli)
-    lastRingDraw = now;
-    rbwRotP += 0.5f * cfg[6] / 100.0f;
-    if (rbwRotP >= 32.0f) rbwRotP -= 32.0f;
-    drawRing(1.0f, rbwColP[((int)rbwRotP) & 31]);
-  }
-  (void)connected;
-}
+void updatePhotoStandby(bool connected) { (void)connected; }   // v22.42: mapDecode() TIDAK lagi di-stub di sini, tersedia walau TILT_UI false (lihat atas)
 #endif
 
 void updateFace(bool connected) {
@@ -4795,7 +4709,7 @@ void bleWpEnd(uint32_t crc) {
 // Citra baru ditulis ke slot program yang TIDAK sedang berjalan (app0 <-> app1). Slot lama tidak disentuh, jadi upload yang gagal/terputus tidak merusak
 // program yang jalan. Pindah slot (esp_ota_set_boot_partition) hanya setelah panjang, CRC-32 dan esp_ota_end (keabsahan citra) semuanya cocok.
 // Status memakai wpUp yang sama dengan upload wallpaper: 1 bersiap, 2 siap, 3 menerima, 4 sukses (lalu restart), 5 gagal.
-#define FW_VER "v22.43"
+#define FW_VER "v22.42"
 #define DEBUG_NAV_OVERLAY 0   // v22.42: overlay debug dimatikan - bug navigasi sudah beres
 #ifdef OTA_WITH_SEQUENTIAL_WRITES
   #define OTA_BEGIN_SZ OTA_WITH_SEQUENTIAL_WRITES                  // hapus flash sedikit-sedikit saat menulis: mulai cepat
@@ -5571,11 +5485,7 @@ void loop() {
     enterStandby(connected);
   }
   if (standby) {
-#if TILT_UI
-    if (standbyMode == 1 && canvasOK && fb) updatePhotoStandby(connected);
-#else
-    if (standbyMode == 1) updatePhotoStandby(connected);   // v22.43: jalan langsung ke panel, tidak butuh fb lagi
-#endif
+    if (standbyMode == 1 && canvasOK && fb) updatePhotoStandby(connected);  // v22.42 fix: mode foto/video butuh kanvas PENUH (fb, hanya ada bila TILT_UI); canvasOK saja bisa true dari kanvas kecil animasi boot -> dulu nyangkut diam, sekarang fallback ke wajah
     else updateFace(connected);
 #if DEBUG_NAV_OVERLAY
     {
