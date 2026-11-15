@@ -1,0 +1,35 @@
+--- a/motor_nav_esp32_v22/motor_nav_esp32_v22.ino	2026-11-15 13:34:41.873630213 +0000
++++ b/motor_nav_esp32_v22/motor_nav_esp32_v22.ino	2026-11-15 13:34:41.875930583 +0000
+@@ -435,7 +435,8 @@
+ #define SPI_HZ           80000000UL // turunkan ke 40000000UL jika layar muncul noise
+ 
+ // --- Kanvas penuh (dipakai standby foto/video, wajah, notifikasi, game; v22.35: sudut miring MPU6050 dihapus, tampilan selalu tegak) ---
+-#define TILT_UI       false    // v22.42: dimatikan - 115 KB RAM-nya dipakai buffer peta (MAP_BLE) spy navigasi jalan. Mode standby foto/video & layar miring otomatis nonaktif, fallback ke wajah.
++#define TILT_UI       true     // v22.42b: dinyalakan lagi - navigasi sekarang TIDAK butuh kanvas (lihat mapDecode v22.42), dan setup() akan
++                               // otomatis membebaskan kanvas ini kalau RAM kurang buat buffer peta/BLE (lihat blok "jaga-jaga" di setup()).
+                                // false: matikan kanvas penuh (kembali ke gambar langsung ke layar, hemat memori)
+ // --- Buzzer (aktif: bunyi saat pin HIGH) ---
+ #define BUZZER_ON true
+@@ -5244,6 +5245,22 @@
+   if (!jdPool) jdPool = (uint8_t *)malloc(JD_POOL);
+   artBuf = (uint16_t *)malloc(ART_BYTES);
+   Serial.printf("[boot] setup selesai | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
++
++  // v22.42b: jaga-jaga - kalau TILT_UI true dan kanvas (115 KB) kebetulan menyita RAM sampai salah satu
++  // buffer navigasi di atas gagal dialokasi, BEBASKAN kanvas sekarang juga (pola sama persis dengan mode
++  // WiFi upload) lalu coba lagi. Navigasi selalu menang; foto/video standby cuma dapat RAM kalau sisa cukup.
++  if ((!mapBuf[0] || !mapBuf[1] || !jdPool || !artBuf) && canvasOK && fb) {
++    Serial.println("[boot] RAM kurang utk buffer navigasi -> bebaskan kanvas (foto/video standby nonaktif kali ini), prioritas navigasi");
++    for (int i = 0; i < SplitCanvas::SN; i++) { free(fb->s[i]); fb->s[i] = nullptr; }
++    canvasOK = false;
++    cv = nullptr;
++    gfx = panel;
++    if (!mapBuf[0]) mapBuf[0] = (uint8_t *)malloc(MAP_BUF_SZ);
++    if (!mapBuf[1]) mapBuf[1] = (uint8_t *)malloc(MAP_BUF_SZ);
++    if (!jdPool)    jdPool    = (uint8_t *)malloc(JD_POOL);
++    if (!artBuf)    artBuf    = (uint16_t *)malloc(ART_BYTES);
++    Serial.printf("[boot] setelah bebaskan kanvas | buffer peta %p %p %p art %p | heap %u\n", mapBuf[0], mapBuf[1], jdPool, artBuf, (unsigned)ESP.getFreeHeap());
++  }
+ #endif
+ }
+ 

@@ -1,0 +1,100 @@
+--- a/motor_nav_esp32_v22/motor_nav_esp32_v22.ino	2026-11-15 13:23:04.574482823 +0000
++++ b/motor_nav_esp32_v22/motor_nav_esp32_v22.ino	2026-11-15 13:23:04.573078173 +0000
+@@ -822,6 +822,8 @@
+ uint8_t navStyle = 0;                                              // 0 = peta (gaya Google Maps), 1 = jalan 3D + motor (lama)
+ 
+ bool mapDecode(const uint8_t *p, uint32_t len);                   // didefinisikan di bagian video (dekoder JPEG ROM)
++bool mapDecodeDirect(const uint8_t *p, uint32_t len);             // v22.41b: sama, tapi langsung ke panel (bypass kanvas); didefinisikan di bagian video
++extern bool mapDirectDrawn;                                        // v22.41b: diset drawNavPage, dibaca loop() utama
+ 
+ #if MAP_BLE
+ void bleNotifText(uint16_t off, uint16_t tot, const uint8_t *d, size_t n);   // v22.15
+@@ -1147,7 +1149,8 @@
+   gfx->fillScreen(COL_BG);
+ #if MAP_BLE
+   if (appNavOn()) {                                                // v22.12: aplikasi MotorNav menggambar seluruh layar (peta + banner + kecepatan)
+-    if (mapFresh() && mapDecode(mapBuf[mapAct], mapLen[mapAct])) return;
++    // v22.41b: gambar langsung ke panel (bypass kanvas) -> tidak lagi bergantung pada kanvas 115 KB (fb) berhasil dialokasi
++    if (mapFresh() && mapDecodeDirect(mapBuf[mapAct], mapLen[mapAct])) { mapDirectDrawn = true; return; }
+     drawRing(1.0f, COL_ORANGE);
+     drawCentered("Menunggu", 85, 3, COL_TEXT);
+     drawCentered("peta...", 118, 3, COL_DIM);
+@@ -2710,7 +2713,7 @@
+   return rc == JDR_OK;
+ }
+ 
+-bool mapDecode(const uint8_t *p, uint32_t len) {                   // JPEG 240x240 dari RAM -> kanvas
++bool mapDecode(const uint8_t *p, uint32_t len) {                   // JPEG 240x240 dari RAM -> kanvas (dipakai navStyle==2 lama, perlu komposit teks di atas peta)
+   if (!jdPool || !fb || !p || len < 100) return false;
+   jdSrc = p; jdLen = len; jdPos = 0;
+   JDEC jd;
+@@ -2719,9 +2722,36 @@
+   if (rc == JDR_OK) rc = jd_decomp(&jd, jdOut, 0);
+   return rc == JDR_OK;
+ }
++
++// v22.41b: blok RGB888 hasil decode -> LANGSUNG ke panel fisik (bypass kanvas sepenuhnya, 0 byte RAM tambahan).
++// Blok JPEG ROM (MCU) selalu <=16x16, jadi buffer statis kecil ini cukup.
++static UINT jdOutPanel(JDEC *jd, void *bmp, JRECT *r) {
++  (void)jd;
++  static uint16_t blk[16 * 16];
++  int w = r->right - r->left + 1, h = r->bottom - r->top + 1;
++  if (w > 16 || h > 16 || w <= 0 || h <= 0) return 0;
++  const uint8_t *p = (const uint8_t *)bmp;
++  for (int i = 0; i < w * h; i++, p += 3)
++    blk[i] = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
++  panel->draw16bitRGBBitmap(r->left, r->top, blk, w, h);
++  return 1;
++}
++
++// v22.41b: khusus halaman peta dari aplikasi (appNavOn, HP sudah gambar seluruh layar + panah + banner).
++// TIDAK butuh kanvas (fb) sama sekali -> peta tetap bisa muncul walau kanvas 115 KB gagal/sedang dipakai wajah/standby/game.
++bool mapDecodeDirect(const uint8_t *p, uint32_t len) {
++  if (!jdPool || !p || len < 100) return false;
++  jdSrc = p; jdLen = len; jdPos = 0;
++  JDEC jd;
++  JRESULT rc = jd_prepare(&jd, jdIn, jdPool, JD_POOL, nullptr);
++  if (rc == JDR_OK && (jd.width != 240 || jd.height != 240)) rc = JDR_PAR;
++  if (rc == JDR_OK) rc = jd_decomp(&jd, jdOutPanel, 0);
++  return rc == JDR_OK;
++}
+ #else
+ bool vidDecode(int) { return false; }
+ bool mapDecode(const uint8_t *, uint32_t) { return false; }
++bool mapDecodeDirect(const uint8_t *, uint32_t) { return false; }
+ #endif
+ 
+ static inline uint16_t blend565(uint16_t bg, uint16_t fg, int a) {   // a: 0..256
+@@ -3115,6 +3145,7 @@
+ float    uiAngle = 0;                 // sudut putar tampilan (derajat, searah jarum jam positif), dihaluskan
+ float    presentedAngle = 999;
+ bool     fbDirty = true;
++bool     mapDirectDrawn = false;      // v22.41b: true bila frame ini peta app digambar LANGSUNG ke panel (lewati kanvas), supaya present()/tiltRefresh() tidak menimpanya dengan kanvas basi
+ 
+ #if TILT_UI
+ uint16_t stripBuf[240 * 8];
+@@ -5316,6 +5347,7 @@
+ }
+ 
+ void drawCurrentPage(const Navigation &nav, bool connected) {
++  mapDirectDrawn = false;             // v22.41b: default; hanya diset true oleh drawNavPage saat benar2 gambar langsung ke panel
+   switch (page) {
+     case PAGE_NAV:   drawNavPage(nav, connected);   break;
+     default: break;
+@@ -5464,11 +5496,14 @@
+     if (pendingFade) {                                              // halaman timbul perlahan (palet diredupkan)
+       pendingFade = false;
+       static const float FS[4] = {0.16f, 0.38f, 0.64f, 0.86f};
+-      for (int k = 0; k < 4; k++) { buildPalette(FS[k]); drawCurrentPage(nav, connected); syncFB(); }
++      for (int k = 0; k < 4; k++) {
++        buildPalette(FS[k]); drawCurrentPage(nav, connected);
++        if (!mapDirectDrawn) syncFB();   // v22.41b: peta app (gambar langsung ke panel) tidak perlu/boleh ditimpa animasi fade kanvas
++      }
+       buildPalette(1.0f);
+     }
+     drawCurrentPage(nav, connected);
+-    fbDirty = true;
++    fbDirty = !mapDirectDrawn;        // v22.41b: kalau peta baru saja ditulis langsung ke panel, JANGAN biarkan present() berikutnya menimpanya dengan kanvas basi
+   }
+   tiltRefresh();
+   delay(10);
