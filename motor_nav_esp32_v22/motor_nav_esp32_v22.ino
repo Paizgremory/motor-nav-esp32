@@ -5275,6 +5275,7 @@ static void ensureScratch0() {
 // hanya bertindak kalau statusnya BERUBAH dari sebelumnya.
 bool navRamActive = false;
 static uint32_t canvasRetryAt = 0;        // v22.42d: 0 = tidak ada percobaan ulang tertunda
+static uint32_t canvasFailSince = 0;       // v22.42e: kapan percobaan ulang pertama kali gagal (0 = belum)
 
 static bool tryCanvasBack() {             // v22.42d: coba alokasi ulang kanvas; dipakai navRamEnsure() & retry berkala
   if (!fb) fb = new SplitCanvas();
@@ -5307,6 +5308,7 @@ void navRamEnsure(bool wantNav) {
     if (artBuf)    { free(artBuf);    artBuf    = nullptr; }
     if (!canvasOK && !tryCanvasBack()) {
       canvasRetryAt = millis() + 2000;   // v22.42d: gagal (kemungkinan RAM masih dipakai sesi BLE) -> coba lagi tiap 2 dtk
+      canvasFailSince = millis();        // v22.42e: catat kapan mulai gagal, buat jaga-jaga restart kalau kelamaan
       Serial.println("[navRAM] kanvas gagal dialokasi ulang, akan dicoba lagi tiap 2 dtk");
     }
     Serial.printf("[navRAM] navigasi OFF, kanvas %s | heap %u\n", canvasOK ? "ON" : "GAGAL", (unsigned)ESP.getFreeHeap());
@@ -5316,8 +5318,15 @@ void navRamEnsure(bool wantNav) {
 // v22.42d: dipanggil tiap loop(); kalau ada percobaan ulang kanvas tertunda (lihat atas) dan waktunya tiba, coba lagi.
 void navRamRetryTick() {
   if (!canvasRetryAt || navRamActive || millis() < canvasRetryAt) return;
-  if (tryCanvasBack()) Serial.printf("[navRAM] kanvas berhasil dialokasi ulang (percobaan berikutnya) | heap %u\n", (unsigned)ESP.getFreeHeap());
-  else canvasRetryAt = millis() + 2000;
+  if (tryCanvasBack()) { Serial.printf("[navRAM] kanvas berhasil dialokasi ulang (percobaan berikutnya) | heap %u\n", (unsigned)ESP.getFreeHeap()); canvasFailSince = 0; return; }
+  canvasRetryAt = millis() + 2000;
+  // v22.42e: jaga-jaga terakhir - kalau 30 detik berturut-turut tetap gagal (bukan sekadar RAM sesi BLE yg lambat
+  // dilepas), ESP32 restart sendiri. Aman: ini SELALU di luar mode navigasi, jadi tidak ada yang sedang dikerjakan.
+  if (canvasFailSince && millis() - canvasFailSince > 30000) {
+    Serial.println("[navRAM] kanvas gagal >30 dtk, restart ESP32 sbg jaga-jaga terakhir");
+    delay(100);
+    ESP.restart();
+  }
 }
 #endif
 
