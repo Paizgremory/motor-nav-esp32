@@ -345,7 +345,10 @@
 #include <Preferences.h>
 #include "standby_photo.h"
 #include <esp_partition.h>
+#define HAVE_OTA (!CONFIG_IDF_TARGET_ESP32C3)   // v22.43: dihapus khusus di C3 - cuma 1 slot program, RAM/flash-nya dialihkan ke koleksi foto/video
+#if HAVE_OTA
 #include <esp_ota_ops.h>                                      // v22.31: update firmware lewat BLE
+#endif
 #include <WiFi.h>                                           // v22.37: mode UPLOAD WIFI juga untuk C3 (tanpa SD: berkas ditulis ke partisi flash)
 #include <esp_http_server.h>
 #if !CONFIG_IDF_TARGET_ESP32C3
@@ -357,7 +360,11 @@ struct Navigation;                                          // v22.37: deklarasi
   #include <SPI.h>
   #include <SD.h>
 #else
-  #define HAVE_SD 0
+  // v22.43: HAVE_SD sekarang berarti "ada filesystem pustaka foto/video" (microSD fisik DI ESP32 biasa,
+  // ATAU LittleFS/flash internal di C3 - lihat makro "#define SD LittleFS" dekat sdBegin()), BUKAN lagi
+  // berarti harus ada kartu SD secara harfiah. Jadi tetap 1 di C3 supaya seluruh kode pustaka wallpaper/
+  // animasi-boot (wpPath/wpList/wpMigrate/bleWpBegin dst, ~35 titik "#if HAVE_SD") ikut terpakai di C3.
+  #define HAVE_SD 1
 #endif
 #include <esp_idf_version.h>
 #if __has_include(<rom/tjpgd.h>)
@@ -388,14 +395,24 @@ struct Navigation;                                          // v22.37: deklarasi
 #endif
 
 #if HAVE_SD
-  // v22.42: pin SD dipindah sbg percobaan diagnosa (dulu 14/19/13/26, dicurigai salah satu rusak/kurang
-  // kontak). Pin baru ini juga aman: tidak bentrok dgn layar (VSPI 18/23/5/2/4/27), relay (32/33), buzzer
-  // (25), atau flash internal (6-11). KABEL FISIK WAJIB DIPINDAH JUGA ke pin baru ini kalau dipakai.
-  #define SD_SCK   21
-  #define SD_MISO  17
-  #define SD_MOSI  22
-  #define SD_CS    16
+#if !CONFIG_IDF_TARGET_ESP32C3
+  // v22.42h: percobaan pindah pin SD yg KEDUA kalinya (riwayat: 14/19/13/26 -> 21/17/22/16 [v22.42] -> ini).
+  // GPIO34 benar2 segar & paling aman utk MISO (input-only, tdk pernah dipakai apa pun di board ini).
+  // GPIO15 segar & aman dipakai (strapping MTDO, efeknya cuma log boot jadi diam - tidak bikin gagal boot).
+  // SD_CS/SD_MOSI pakai ulang dari set PERTAMA (19/13) krn semua GPIO umum lain sudah kepakai peripheral lain
+  // (layar VSPI 18/23/5/2/4, sentuh 27, buzzer 25) atau kritikal keselamatan (relay kunci kontak/starter 32/33
+  // - SENGAJA TIDAK disentuh). GPIO12 SENGAJA DIHINDARI sepenuhnya (risiko gagal boot total/brick kalau
+  // tertarik HIGH saat nyala). KABEL FISIK WAJIB DIPINDAH JUGA ke pin baru ini kalau dipakai.
+  #define SD_SCK   15
+  #define SD_MISO  34
+  #define SD_MOSI  13
+  #define SD_CS    19
   #define SD_HZ    20000000
+#endif
+  // v22.43: nama berkas & folder pustaka di bawah ini dipakai BERSAMA oleh ESP32 biasa (kartu microSD fisik,
+  // lewat SD.h) maupun C3 (tanpa kartu, "SD" dialihkan ke LittleFS/flash internal - lihat sdBegin() & makro
+  // "#define SD LittleFS" di bawah). Jadi seluruh kode pustaka wallpaper/animasi-boot di bawah ini TIDAK
+  // perlu ditulis dua kali, cukup satu jalur kode untuk kedua target.
   #define SD_WALL      "/wallpaper.mnv"
   #define SD_WALL_TMP  "/wallpaper.tmp"
   #define SD_BOOT      "/bootanim.mnv"
@@ -2575,22 +2592,40 @@ const uint32_t *vidTab = nullptr;        // tabel (offset, panjang) tiap frame, 
 bool     vidOK = false;
 
 #if HAVE_SD
-// ---------- v22.27/28: microSD ----------
-SPIClass sdSpi(HSPI);
-bool sdOK = false;                         // kartu terpasang & terbaca
-#define SDV_WIN 128                        // jendela tabel frame di RAM (128 frame = 1 KB)
+// ---------- v22.27/28: microSD (ESP32 biasa) / v22.43: LittleFS flash internal (C3, tanpa kartu fisik) ----------
+// Kode pustaka wallpaper/animasi-boot di bawah/setelah ini (wpPath, wpList, wpMigrate, bleWpBegin, SdVid, dst)
+// semuanya ditulis memakai "SD.xxx(...)". Di C3 kita alihkan token "SD" itu jadi "LittleFS" lewat makro
+// preprocessor, supaya SELURUH kode itu kepakai ulang apa adanya tanpa disalin/ditulis dua kali - hanya
+// sdBegin() (cara me-mount-nya beda) yang punya dua versi terpisah di bawah.
+#if CONFIG_IDF_TARGET_ESP32C3
+  #include <LittleFS.h>
+  #define SD LittleFS
+  bool sdOK = false;                       // "LittleFS siap dipakai" (nama variabel dipertahankan, dipakai kode pustaka di bawah)
+  #define SDV_WIN 128                      // jendela tabel frame di RAM (128 frame = 1 KB)
 
-void sdBegin() {
-  sdSpi.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  static const uint32_t hzTry[] = {SD_HZ, 10000000, 4000000, 1000000};   // v22.40: kabel jumper sering gagal di 20 MHz -> coba makin pelan
-  sdOK = false;
-  for (uint8_t i = 0; i < 4 && !sdOK; i++) {
-    if (i) SD.end();
-    sdOK = SD.begin(SD_CS, sdSpi, hzTry[i]);
-    if (sdOK) Serial.printf("SD: terbaca @ %u Hz | tipe %u | %u MB\n", (unsigned)hzTry[i], (unsigned)SD.cardType(), (unsigned)(SD.cardSize() / (1024ULL * 1024ULL)));
+  void sdBegin() {
+    // formatOnFail=true: partisi "wplib" otomatis diformat LittleFS begitu pertama kali dipakai (partisi baru/kosong)
+    sdOK = LittleFS.begin(true, "/littlefs", 10, "wplib");
+    if (sdOK) Serial.printf("LittleFS: siap | %u/%u KB terpakai\n", (unsigned)(LittleFS.usedBytes() / 1024), (unsigned)(LittleFS.totalBytes() / 1024));
+    else Serial.println("LittleFS: gagal mount (cek partisi \"wplib\" ada di partition table) -- pakai partisi flash cadangan");
   }
-  if (!sdOK) Serial.println("SD: tidak ada / gagal dibaca (pakai partisi flash) -- cek kabel, VCC 5V, format FAT32");
-}
+#else
+  SPIClass sdSpi(HSPI);
+  bool sdOK = false;                         // kartu terpasang & terbaca
+  #define SDV_WIN 128                        // jendela tabel frame di RAM (128 frame = 1 KB)
+
+  void sdBegin() {
+    sdSpi.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+    static const uint32_t hzTry[] = {SD_HZ, 10000000, 4000000, 1000000};   // v22.40: kabel jumper sering gagal di 20 MHz -> coba makin pelan
+    sdOK = false;
+    for (uint8_t i = 0; i < 4 && !sdOK; i++) {
+      if (i) SD.end();
+      sdOK = SD.begin(SD_CS, sdSpi, hzTry[i]);
+      if (sdOK) Serial.printf("SD: terbaca @ %u Hz | tipe %u | %u MB\n", (unsigned)hzTry[i], (unsigned)SD.cardType(), (unsigned)(SD.cardSize() / (1024ULL * 1024ULL)));
+    }
+    if (!sdOK) Serial.println("SD: tidak ada / gagal dibaca (pakai partisi flash) -- cek kabel, VCC 5V, format FAT32");
+  }
+#endif
 
 // Video di SD: "MNVIDEO2" (header 8 KB, maks 900 frame) atau "MNVIDEO3" (header = 16 + n*8 dibulatkan 4 KB, sampai 65535 frame).
 // Tabel (offset,panjang) tiap frame dibaca per jendela; hanya satu penyangga frame di RAM.
@@ -4724,6 +4759,7 @@ void bleWpEnd(uint32_t crc) {
 #else
   #define OTA_BEGIN_SZ OTA_SIZE_UNKNOWN                            // core lama: seluruh slot dihapus di depan (beberapa detik)
 #endif
+#if HAVE_OTA
 static esp_ota_handle_t otaH = 0;
 static const esp_partition_t *otaPart = nullptr;
 static bool otaMode = false;                                       // ada sesi OTA berjalan (status wpUp milik OTA)
@@ -4838,6 +4874,25 @@ static void otaTick() {                                            // dipanggil 
   }
   if (otaRebootAt && (int32_t)(millis() - otaRebootAt) >= 0) { otaRebootAt = 0; ESP.restart(); }
 }
+#else
+// v22.43: OTA DIHAPUS di C3 (cuma 1 slot program di partition table -> tidak ada slot kedua utk OTA).
+// Stub di bawah menjaga semua titik panggil (opcode BLE 0x2A-0x2E, bleWpBegin, bleWpTick) tetap kompilasi
+// sama persis, tapi langsung membalas "OTA tidak tersedia" tanpa menyentuh esp_ota_* sama sekali.
+static bool otaMode = false;
+static volatile bool otaReq = false, otaEndReq = false;
+void bleOtaBegin(uint32_t) { wpUpSet(5); }                         // langsung gagal - app akan tampilkan pesan error
+void bleOtaData(uint32_t, const uint8_t *, size_t) {}
+void bleOtaEnd(uint32_t) { wpUpSet(5); }
+void bleOtaInfo() {                                                // balas "tidak tersedia" (bendera bit0 = 0) spy app tdk menunggu/hang
+  if (mapChr) {
+    uint8_t b[40] = {0xE4, 0, 0, 0, 0, 0};
+    size_t l = strlen(FW_VER); memcpy(b + 6, FW_VER, l);
+    mapChr->notify(b, 6 + l);
+  }
+}
+void bleOtaAbort() {}
+static void otaTick() {}
+#endif
 
 #if HAVE_SD
 static void wpSendList(uint8_t tgt) {                              // v22.29: kirim daftar wallpaper di SD lewat notify 0xE2; v22.30: tgt 1 = animasi boot (0xE3)
@@ -4847,7 +4902,11 @@ static void wpSendList(uint8_t tgt) {                              // v22.29: ki
   const uint16_t *sl = tgt ? btSlots : wpSlots;
   const uint8_t cnt = tgt ? btCount : wpCount;
   const uint16_t sel = tgt ? btSel : wpSel;
+#if CONFIG_IDF_TARGET_ESP32C3
+  uint32_t mb = sdOK ? (uint32_t)(LittleFS.totalBytes() / (1024ULL * 1024ULL)) : 0;   // v22.43: LittleFS tdk punya cardSize()
+#else
   uint32_t mb = sdOK ? (uint32_t)(SD.cardSize() / (1024ULL * 1024ULL)) : 0;
+#endif
   if (mb > 65535) mb = 65535;
   uint8_t h[8] = {code, 0, (uint8_t)(sdOK ? 1 : 0), cnt, (uint8_t)(sel & 255), (uint8_t)(sel >> 8), (uint8_t)(mb & 255), (uint8_t)(mb >> 8)};
   mapChr->notify(h, 8);
