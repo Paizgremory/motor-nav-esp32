@@ -340,6 +340,11 @@
 */
 
 #include <Arduino_GFX_Library.h>
+// v22.44: paksa API advertising LAMA (legacy) di semua chip. Tanpa ini, NimBLE-Arduino 2.x otomatis
+// pakai API "extended advertising" baru di chip yg mendukung BLE5 (C3/S3), beda dari ESP32 biasa (cuma
+// BLE4.2, otomatis tetap API lama) - bikin NimBLEAdvertising/NimBLEAdvertisementData "tidak ada" & error
+// kompilasi KHUSUS di C3/S3 walau kode sumbernya identik. Didefinisikan SEBELUM include, harus baris pertama.
+#define CONFIG_BT_NIMBLE_EXT_ADV 0
 #include <NimBLEDevice.h>
 #include <math.h>
 #include <Preferences.h>
