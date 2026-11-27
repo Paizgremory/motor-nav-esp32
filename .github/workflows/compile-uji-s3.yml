@@ -1,0 +1,44 @@
+name: Compile uji-s3 Nimble
+
+on:
+  push:
+    branches:
+      - uji-s3
+
+jobs:
+  build-s3:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: latest
+
+      - name: Configure ESP32 board core and libraries
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install "Arduino GFX Library" "NimBLE-Arduino"
+
+      - name: Compile motor_nav_esp32_v22_44_fix_nimble.ino for ESP32-S3
+        run: |
+          TARGET_SKETCH="motor_nav_esp32_v22_44_fix_nimble.ino"
+          if [ ! -f "$TARGET_SKETCH" ]; then
+            echo "File $TARGET_SKETCH tidak ditemukan di root repo."
+            exit 1
+          fi
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc \
+            --output-dir build/esp32s3 \
+            "$TARGET_SKETCH"
+
+      - name: Upload ESP32-S3 firmware binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32s3-nimble
+          path: build/esp32s3/*.bin
