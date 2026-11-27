@@ -383,6 +383,20 @@ struct Navigation;                                          // v22.37: deklarasi
   #define PIN_TOUCH 5
   #define PIN_BOOT  -1       // v22.35: GPIO9 bebas (dulu dipakai SCL MPU6050, sekarang tidak dipakai); tombol BOOT C3 tetap tidak dipakai
   #define PIN_BUZZ  10
+#elif CONFIG_IDF_TARGET_ESP32S3
+  // v22.44: papan uji "TENSTAR ROBOT Super Mini ESP32-S3" - dipakai KHUSUS buat diagnosa (SD card FISIK
+  // tetap dipakai di sini, beda dari C3 yang sudah dialihkan ke LittleFS), supaya ketahuan apakah masalah
+  // baca-SD kemarin itu soal board/pin atau murni kabel/kartu/listrik. Semua pin di bawah ini SENGAJA
+  // menghindari: GPIO0/3/45/46 (strapping), GPIO19/20 (USB internal, tidak keluar di header board ini),
+  // GPIO43/44 (TX/RX, dijaga tetap bebas buat Serial Monitor debug).
+  #define PIN_SCK   12
+  #define PIN_MOSI  11
+  #define PIN_CS    10
+  #define PIN_DC    9
+  #define PIN_RST   8
+  #define PIN_TOUCH 13
+  #define PIN_BOOT  0        // tombol BOOT bawaan board (label "BOOT" di foto) = GPIO0, aktif LOW
+  #define PIN_BUZZ  14
 #else                       // ESP32 biasa (VSPI)
   #define PIN_SCK   18
   #define PIN_MOSI  23
@@ -395,7 +409,15 @@ struct Navigation;                                          // v22.37: deklarasi
 #endif
 
 #if HAVE_SD
-#if !CONFIG_IDF_TARGET_ESP32C3
+#if CONFIG_IDF_TARGET_ESP32S3
+  // v22.44: SD FISIK di board uji S3 - pin bersih sepenuhnya, TIDAK ada kompromi strapping sama sekali
+  // (beda dari 2 percobaan sebelumnya di ESP32 biasa yang kehabisan pin bersih).
+  #define SD_SCK   17
+  #define SD_MISO  18
+  #define SD_MOSI  21
+  #define SD_CS    1
+  #define SD_HZ    20000000
+#elif !CONFIG_IDF_TARGET_ESP32C3
   // v22.42h: percobaan pindah pin SD yg KEDUA kalinya (riwayat: 14/19/13/26 -> 21/17/22/16 [v22.42] -> ini).
   // GPIO34 benar2 segar & paling aman utk MISO (input-only, tdk pernah dipakai apa pun di board ini).
   // GPIO15 segar & aman dipakai (strapping MTDO, efeknya cuma log boot jadi diam - tidak bikin gagal boot).
@@ -873,6 +895,9 @@ static NimBLECharacteristic *mapChr = nullptr;
 #if CONFIG_IDF_TARGET_ESP32C3
   #define PIN_RLY_IGN    1
   #define PIN_RLY_START  20
+#elif CONFIG_IDF_TARGET_ESP32S3
+  #define PIN_RLY_IGN    15      // v22.44: papan uji S3 - pin bersih, tidak bentrok apa pun di atas
+  #define PIN_RLY_START  16
 #else
   #define PIN_RLY_IGN    32      // IN1 modul relay -> kunci kontak
   #define PIN_RLY_START  33      // IN2 modul relay -> starter
